@@ -1,0 +1,147 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap");
+@import "tailwindcss";
+
+@theme {
+  --color-surface: #fffbff;
+  --color-surface-dim: #f4dce0;
+  --color-surface-bright: #fffbff;
+  --color-surface-container-lowest: #ffffff;
+  --color-surface-container-low: #fef0f2;
+  --color-surface-container: #fae6e8;
+  --color-surface-container-high: #f4dce0;
+  --color-surface-container-highest: #eed2d7;
+  --color-on-surface: #201a1a;
+  --color-on-surface-variant: #524344;
+  --color-inverse-surface: #362f2f;
+  --color-inverse-on-surface: #fbeeef;
+  --color-outline: #857374;
+  --color-outline-variant: #d7c1c2;
+  --color-surface-tint: #900021;
+  --color-primary: #7c0a1f;
+  --color-on-primary: #ffffff;
+  --color-primary-container: #ffd9de;
+  --color-on-primary-container: #3f000a;
+  --color-inverse-primary: #ffb2bc;
+  --color-secondary: #aa8600;
+  --color-on-secondary: #ffffff;
+  --color-secondary-container: #ffdf97;
+  --color-on-secondary-container: #261900;
+  --color-tertiary: #b9003c;
+  --color-on-tertiary: #ffffff;
+  --color-tertiary-container: #ffd9e0;
+  --color-on-tertiary-container: #3f000f;
+  --color-error: #ba1a1a;
+  --color-on-error: #ffffff;
+  --color-error-container: #ffdad6;
+  --color-on-error-container: #410002;
+  --color-primary-fixed: #ffd9de;
+  --color-primary-fixed-dim: #ffb2bc;
+  --color-on-primary-fixed: #3f000a;
+  --color-on-primary-fixed-variant: #690017;
+  --color-secondary-fixed: #ffdf97;
+  --color-secondary-fixed-dim: #dec147;
+  --color-on-secondary-fixed: #261900;
+  --color-on-secondary-fixed-variant: #604a00;
+  --color-tertiary-fixed: #ffd9e0;
+  --color-tertiary-fixed-dim: #ffb1c3;
+  --color-on-tertiary-fixed: #3f000f;
+  --color-on-tertiary-fixed-variant: #90002d;
+  --color-background: #fffbff;
+  --color-on-background: #201a1a;
+  
+  --spacing-base: 8px;
+  --spacing-xs: 4px;
+  --spacing-sm: 12px;
+  --spacing-md: 16px;
+  --spacing-lg: 24px;
+  --spacing-xl: 40px;
+  --spacing-container-max: 1280px;
+  --spacing-gutter: 24px;
+  --spacing-margin-mobile: 16px;
+
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+}
+
+@layer utilities {
+  .font-display-lg {
+    font-size: 48px;
+    line-height: 56px;
+    letter-spacing: -0.02em;
+    font-weight: 700;
+  }
+  .font-headline-lg {
+    font-size: 32px;
+    line-height: 40px;
+    letter-spacing: -0.01em;
+    font-weight: 600;
+  }
+  .font-headline-lg-mobile {
+    font-size: 24px;
+    line-height: 32px;
+    font-weight: 600;
+  }
+  .font-headline-md {
+    font-size: 24px;
+    line-height: 32px;
+    font-weight: 600;
+  }
+  .font-title-lg {
+    font-size: 20px;
+    line-height: 28px;
+    font-weight: 600;
+  }
+  .font-body-lg {
+    font-size: 18px;
+    line-height: 28px;
+    font-weight: 400;
+  }
+  .font-body-md {
+    font-size: 16px;
+    line-height: 24px;
+    font-weight: 400;
+  }
+  .font-body-sm {
+    font-size: 14px;
+    line-height: 20px;
+    font-weight: 400;
+  }
+  .font-label-md {
+    font-size: 12px;
+    line-height: 16px;
+    letter-spacing: 0.05em;
+    font-weight: 600;
+  }
+}
+
+body {
+  @apply bg-background text-on-background font-sans text-base leading-6;
+}
+
+/* Custom Utilities */
+.glass-card {
+    background: rgba(255, 255, 255, 0.8);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+    @apply bg-outline-variant rounded-full;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    @apply bg-outline;
+}
+.hide-scrollbar::-webkit-scrollbar {
+    display: none;
+}
+.hide-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+}
