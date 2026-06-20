@@ -1,308 +1,477 @@
-import React, { useState, useEffect } from 'react';
-import { Download, Users, CheckCircle, Loader2, Clock, AlertCircle } from 'lucide-react';
-import { useSearchParams, useNavigate } from 'react-router-dom';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
 import { QRCodeSVG } from 'qrcode.react';
-import { db, doc, collection, onSnapshot, updateDoc } from '../../lib/firebase';
-import { collections, archiveSession } from '../../lib/db';
+import { motion, AnimatePresence } from 'motion/react';
+import {
+  Users,
+  UserCheck,
+  UserX,
+  Clock,
+  GraduationCap,
+  QrCode,
+  StopCircle,
+  Play,
+  RotateCcw,
+  Shield,
+  Wifi,
+  WifiOff
+} from 'lucide-react';
+import { useAuth } from '../../hooks/useAuth';
+import { useFirestoreRealtimeDocument } from '../../hooks/useFirestoreRealtime';
+import { db, doc, onSnapshot, collection, query, where, getDocs, updateDoc, serverTimestamp } from '../../lib/firebase';
 import { getCurrentTOTP } from '../../lib/totp';
+import { logAudit, closeSession } from '../../lib/db';
+import toast from 'react-hot-toast';
+
+interface SessionData {
+  id: string;
+  courseId: string;
+  courseName?: string;
+  lecturerId: string;
+  startTime: string;
+  endTime: string;
+  windowMinutes: number;
+  status: 'open' | 'closed' | 'archived';
+  totpSecret: string;
+  room?: string;
+  createdAt?: any;
+}
+
+interface AttendanceRecord {
+  studentId: string;
+  studentName: string;
+  studentEmail?: string;
+  timestamp: any;
+  deviceFingerprint: string;
+  status: 'present' | 'late' | 'absent';
+}
+
+const QR_REFRESH_INTERVAL = 5; // seconds
 
 export default function LiveSession() {
-  const [searchParams] = useSearchParams();
+  const { sessionId } = useParams<{ sessionId: string }>();
   const navigate = useNavigate();
-  const sessionId = searchParams.get('sessionId');
+  const { user } = useAuth();
 
-  const [sessionData, setSessionData] = useState<any>(null);
-  const [attendance, setAttendance] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [timeLeft, setTimeLeft] = useState(30);
+  const [session, setSession] = useState<SessionData | null>(null);
+  const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
   const [totpToken, setTotpToken] = useState('');
-  const [ending, setEnding] = useState(false);
+  const [timeLeft, setTimeLeft] = useState(QR_REFRESH_INTERVAL);
+  const [isOpen, setIsOpen] = useState(false);
+  const [totalEnrolled, setTotalEnrolled] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [connectionStatus, setConnectionStatus] = useState<'connected' | 'disconnected'>('connected');
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Session + attendance real-time listeners
+  // Fetch session data
   useEffect(() => {
-    if (!sessionId) {
-      setLoading(false);
-      return;
-    }
-
-    setLoading(true);
-
-    const unsubSession = onSnapshot(
-      doc(db, collections.SESSIONS, sessionId),
+    if (!sessionId) return;
+    const unsubscribe = onSnapshot(
+      doc(db, 'sessions', sessionId),
       (docSnap) => {
         if (docSnap.exists()) {
-          setSessionData({ id: docSnap.id, ...docSnap.data() });
+          const data = docSnap.data() as SessionData;
+          setSession({ id: docSnap.id, ...data });
+          setIsOpen(data.status === 'open');
+          setConnectionStatus('connected');
+        } else {
+          toast.error('Session not found');
+          navigate('/lecturer/dashboard');
         }
         setLoading(false);
       },
       (error) => {
         console.error('Session listener error:', error);
+        setConnectionStatus('disconnected');
         setLoading(false);
       }
     );
+    return () => unsubscribe();
+  }, [sessionId, navigate]);
 
-    // Real-time attendance listener
-    const unsubAttendance = onSnapshot(
-      collection(db, `${collections.SESSIONS}/${sessionId}/attendance`),
-      (snapshot) => {
-        const attList = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
-        // Sort by timestamp descending (most recent first)
-        attList.sort((a: any, b: any) => {
-          const aMs = a.timestamp?.toMillis?.() ?? 0;
-          const bMs = b.timestamp?.toMillis?.() ?? 0;
-          return bMs - aMs;
-        });
-        setAttendance(attList);
-      },
-      (error) => {
-        console.error('Attendance listener error:', error);
-      }
-    );
-
-    return () => {
-      unsubSession();
-      unsubAttendance();
+  // Fetch enrolled students count
+  useEffect(() => {
+    if (!session?.courseId) return;
+    const fetchEnrolled = async () => {
+      const q = query(collection(db, 'enrollments'), where('courseId', '==', session.courseId));
+      const snapshot = await getDocs(q);
+      setTotalEnrolled(snapshot.size);
     };
+    fetchEnrolled();
+  }, [session?.courseId]);
+
+  // Real-time attendance listener
+  useEffect(() => {
+    if (!sessionId) return;
+    const q = collection(db, `sessions/${sessionId}/attendance`);
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const records = snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as AttendanceRecord));
+      // Sort by timestamp descending
+      records.sort((a, b) => {
+        const aTime = a.timestamp?.toDate?.() || 0;
+        const bTime = b.timestamp?.toDate?.() || 0;
+        return bTime - aTime;
+      });
+      setAttendance(records);
+    });
+    return () => unsubscribe();
   }, [sessionId]);
 
-  // TOTP rotation timer
+  // Generate QR token every 5 seconds
+  const generateToken = useCallback(() => {
+    if (!session?.totpSecret) return;
+    const token = getCurrentTOTP(session.totpSecret);
+    setTotpToken(token);
+    setTimeLeft(QR_REFRESH_INTERVAL);
+  }, [session?.totpSecret]);
+
+  // Start QR refresh interval
   useEffect(() => {
-    if (!sessionData?.totpSecret) return;
+    if (!isOpen || !session?.totpSecret) {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+      if (countdownRef.current) clearInterval(countdownRef.current);
+      return;
+    }
 
-    const updateToken = () => {
-      const newToken = getCurrentTOTP(sessionData.totpSecret);
-      setTotpToken(newToken);
-      const epoch = Math.round(Date.now() / 1000);
-      setTimeLeft(30 - (epoch % 30));
+    generateToken(); // Initial generation
+
+    intervalRef.current = setInterval(() => {
+      generateToken();
+    }, QR_REFRESH_INTERVAL * 1000);
+
+    countdownRef.current = setInterval(() => {
+      setTimeLeft((prev) => {
+        if (prev <= 1) return QR_REFRESH_INTERVAL;
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+      if (countdownRef.current) clearInterval(countdownRef.current);
     };
+  }, [isOpen, session?.totpSecret, generateToken]);
 
-    updateToken();
-    const interval = setInterval(updateToken, 1000);
-    return () => clearInterval(interval);
-  }, [sessionData?.totpSecret]);
-
-  const handleEndSession = async () => {
-    if (!sessionId || ending) return;
-    if (!confirm('End this session? Attendance data will be archived.')) return;
-
-    setEnding(true);
+  const handleCloseSession = async () => {
+    if (!sessionId || !user) return;
     try {
-      await updateDoc(doc(db, collections.SESSIONS, sessionId), { status: 'closed' });
-      await archiveSession(sessionId);
-      navigate('/lecturer');
-    } catch (err) {
-      console.error('Failed to end session:', err);
-      alert('Failed to end session. Please try again.');
-      setEnding(false);
+      await closeSession(sessionId, user.uid);
+      await logAudit(user, 'SESSION_CLOSE', 'session', `Closed session ${sessionId}`);
+      toast.success('Session closed successfully');
+    } catch (error: any) {
+      toast.error(error.message || 'Failed to close session');
     }
   };
 
+  const handleReopenSession = async () => {
+    if (!sessionId || !user) return;
+    try {
+      const sessionRef = doc(db, 'sessions', sessionId);
+      await updateDoc(sessionRef, { status: 'open', reopenedAt: serverTimestamp() });
+      await logAudit(user, 'SESSION_REOPEN', 'session', `Reopened session ${sessionId}`);
+      toast.success('Session reopened');
+    } catch (error: any) {
+      toast.error(error.message || 'Failed to reopen session');
+    }
+  };
+
+  const totalPresent = attendance.filter((a) => a.status === 'present').length;
+  const lateCount = attendance.filter((a) => a.status === 'late').length;
+  const totalAbsent = Math.max(0, totalEnrolled - attendance.length);
+
+  const progressPercent = totalEnrolled > 0
+    ? Math.round((attendance.length / totalEnrolled) * 100)
+    : 0;
+
   if (loading) {
     return (
-      <div className="flex h-screen items-center justify-center">
-        <Loader2 className="w-8 h-8 animate-spin text-primary" />
+      <div className="flex items-center justify-center h-96">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary" />
       </div>
     );
   }
 
-  if (!sessionData) {
+  if (!session) {
     return (
-      <div className="max-w-7xl mx-auto p-xl text-center">
-        <h2 className="text-xl font-bold text-on-surface mb-2">Session not found</h2>
-        <p className="text-on-surface-variant mb-6">This session may have ended or doesn't exist.</p>
-        <button
-          onClick={() => navigate('/lecturer')}
-          className="bg-primary text-on-primary px-6 py-3 rounded-lg font-bold"
-        >
-          Back to Dashboard
-        </button>
+      <div className="flex flex-col items-center justify-center h-96 text-center">
+        <WifiOff className="w-16 h-16 text-error mb-4" />
+        <h2 className="text-xl font-semibold text-on-surface">Session Unavailable</h2>
+        <p className="text-on-surface-variant mt-2">The session may have been deleted or you don't have access.</p>
       </div>
     );
   }
 
-  const qrData = `ksas://attend?sessionId=${sessionId}&token=${totpToken}`;
-  const totalEnrolled = sessionData.enrolledCount || 50;
-  const totalPresent = attendance.length;
-  const totalAbsent = Math.max(0, totalEnrolled - totalPresent);
-  const lateCount = attendance.filter((a: any) => a.status === 'late').length;
-  const isOpen = sessionData.status === 'open';
+  const qrData = JSON.stringify({
+    sessionId: session.id,
+    token: totpToken,
+    courseId: session.courseId,
+    timestamp: Date.now()
+  });
 
   return (
-    <div className="max-w-7xl mx-auto p-md md:p-xl space-y-lg animate-in fade-in duration-500">
-
-      {/* Session Header */}
-      <div className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border border-outline-variant/30">
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-md">
-          <div>
-            <div className="flex items-center gap-2 mb-1">
-              <div className={`w-2.5 h-2.5 rounded-full ${isOpen ? 'bg-green-500 animate-pulse' : 'bg-outline'}`}></div>
-              <span className={`font-label-md uppercase tracking-wider ${isOpen ? 'text-green-600' : 'text-on-surface-variant'}`}>
-                {isOpen ? 'Session Live' : 'Session Closed'}
-              </span>
-            </div>
-            <h2 className="font-headline-lg text-primary">{sessionData.courseName}</h2>
-            <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1 text-on-surface-variant font-body-sm">
-              <span>Code: {sessionData.courseCode}</span>
-              <span>Room: {sessionData.room}</span>
-              <span>{sessionData.startTime} – {sessionData.endTime}</span>
-            </div>
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-on-surface">{session.courseName || 'Live Session'}</h1>
+          <p className="text-sm text-on-surface-variant mt-1">
+            {session.startTime} — {session.endTime} • Room {session.room || 'TBA'}
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium ${
+            connectionStatus === 'connected'
+              ? 'bg-success-container text-on-success-container'
+              : 'bg-error-container text-on-error-container'
+          }`}>
+            {connectionStatus === 'connected' ? <Wifi className="w-4 h-4" /> : <WifiOff className="w-4 h-4" />}
+            {connectionStatus === 'connected' ? 'Live' : 'Offline'}
           </div>
-          <button
-            onClick={handleEndSession}
-            disabled={!isOpen || ending}
-            className="bg-error text-on-error py-3 px-6 rounded-lg font-bold shadow hover:bg-error/90 transition-colors disabled:opacity-50 flex items-center gap-2"
-          >
-            {ending ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-            {ending ? 'Ending...' : 'End Session'}
-          </button>
+          {isOpen ? (
+            <button
+              onClick={handleCloseSession}
+              className="flex items-center gap-2 px-4 py-2 bg-error text-on-error rounded-xl font-medium hover:bg-error/90 transition-colors"
+            >
+              <StopCircle className="w-4 h-4" />
+              End Session
+            </button>
+          ) : (
+            <button
+              onClick={handleReopenSession}
+              className="flex items-center gap-2 px-4 py-2 bg-primary text-on-primary rounded-xl font-medium hover:bg-primary/90 transition-colors"
+            >
+              <RotateCcw className="w-4 h-4" />
+              Reopen
+            </button>
+          )}
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-lg items-start">
-
-        {/* Left: Stats + Attendance List */}
-        <div className="lg:col-span-8 space-y-lg">
-
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Left: Stats + Attendance */}
+        <div className="lg:col-span-2 space-y-6">
           {/* Stat Cards */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-md">
-            <div className="bg-surface-container-lowest p-md rounded-xl shadow-sm border-l-4 border-green-400">
-              <p className="font-label-md text-on-surface-variant mb-1">Present</p>
-              <p className="font-headline-lg text-green-600">{totalPresent}</p>
-            </div>
-            <div className="bg-surface-container-lowest p-md rounded-xl shadow-sm border-l-4 border-error">
-              <p className="font-label-md text-on-surface-variant mb-1">Absent</p>
-              <p className="font-headline-lg text-error">{totalAbsent}</p>
-            </div>
-            <div className="bg-surface-container-lowest p-md rounded-xl shadow-sm border-l-4 border-secondary-fixed-dim">
-              <p className="font-label-md text-on-surface-variant mb-1">Late</p>
-              <p className="font-headline-lg text-secondary">{lateCount}</p>
-            </div>
-            <div className="bg-surface-container-lowest p-md rounded-xl shadow-sm border-l-4 border-primary-container">
-              <p className="font-label-md text-on-surface-variant mb-1">Enrolled</p>
-              <p className="font-headline-lg text-primary">{totalEnrolled}</p>
-            </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <StatCard
+              icon={<UserCheck className="w-5 h-5" />}
+              label="Present"
+              value={totalPresent}
+              color="success"
+            />
+            <StatCard
+              icon={<Clock className="w-5 h-5" />}
+              label="Late"
+              value={lateCount}
+              color="warning"
+            />
+            <StatCard
+              icon={<UserX className="w-5 h-5" />}
+              label="Absent"
+              value={totalAbsent}
+              color="error"
+            />
+            <StatCard
+              icon={<GraduationCap className="w-5 h-5" />}
+              label="Enrolled"
+              value={totalEnrolled}
+              color="primary"
+            />
           </div>
 
           {/* Progress */}
-          <div className="bg-surface-container-lowest rounded-xl p-md shadow-sm border border-outline-variant/30">
-            <div className="flex justify-between text-sm mb-2">
-              <span className="font-bold text-on-surface">Check-in Progress</span>
-              <span className="text-on-surface-variant">{totalPresent}/{totalEnrolled} ({Math.round((totalPresent/totalEnrolled)*100)}%)</span>
+          <div className="bg-surface-container rounded-2xl p-6 border border-outline-variant/30">
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-sm font-medium text-on-surface">Check-in Progress</span>
+              <span className="text-sm font-bold text-primary">
+                {attendance.length}/{totalEnrolled} ({progressPercent}%)
+              </span>
             </div>
-            <div className="w-full h-3 bg-surface-variant rounded-full overflow-hidden">
-              <div
-                className="bg-tertiary-container h-full rounded-full transition-all duration-500"
-                style={{ width: `${Math.min(100, (totalPresent/totalEnrolled)*100)}%` }}
-              ></div>
+            <div className="w-full bg-surface-container-highest rounded-full h-3 overflow-hidden">
+              <motion.div
+                className="h-full bg-primary rounded-full"
+                initial={{ width: 0 }}
+                animate={{ width: `${progressPercent}%` }}
+                transition={{ duration: 0.5, ease: 'easeOut' }}
+              />
             </div>
           </div>
 
           {/* Attendance Feed */}
-          <div className="bg-surface-container-lowest rounded-xl shadow-sm border border-outline-variant/30 overflow-hidden">
-            <div className="p-4 border-b border-outline-variant/30 bg-surface-container-low flex justify-between items-center">
-              <h3 className="font-title-lg text-primary flex items-center gap-2">
-                <Users className="w-5 h-5" />
-                Check-ins ({totalPresent})
+          <div className="bg-surface-container rounded-2xl border border-outline-variant/30 overflow-hidden">
+            <div className="px-6 py-4 border-b border-outline-variant/30 flex items-center justify-between">
+              <h3 className="font-semibold text-on-surface flex items-center gap-2">
+                <Users className="w-5 h-5 text-primary" />
+                Check-ins ({attendance.length})
               </h3>
-              {totalPresent === 0 && isOpen && (
-                <span className="text-sm text-on-surface-variant flex items-center gap-1">
-                  <Clock className="w-4 h-4" /> Waiting...
-                </span>
-              )}
+              <span className="text-xs text-on-surface-variant">
+                {isOpen ? 'Accepting new check-ins' : 'Session closed'}
+              </span>
             </div>
 
-            <div className="divide-y divide-outline-variant/20 max-h-[400px] overflow-y-auto">
+            <div className="max-h-[500px] overflow-y-auto">
               {attendance.length === 0 ? (
-                <div className="p-8 text-center text-on-surface-variant">
-                  <AlertCircle className="w-8 h-8 mx-auto mb-2 opacity-40" />
-                  <p>No check-ins yet.</p>
-                  <p className="text-sm mt-1">Students should scan the QR code to register attendance.</p>
+                <div className="px-6 py-12 text-center">
+                  <QrCode className="w-12 h-12 text-on-surface-variant/30 mx-auto mb-3" />
+                  <p className="text-on-surface-variant font-medium">No check-ins yet</p>
+                  <p className="text-sm text-on-surface-variant/60 mt-1">
+                    Students should scan the QR code to register attendance
+                  </p>
                 </div>
               ) : (
-                attendance.map((att: any, index) => (
-                  <div
-                    key={att.id}
-                    className="flex items-center justify-between px-5 py-3 hover:bg-surface-container-low transition-colors animate-in slide-in-from-left-4 fade-in duration-300"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-full bg-surface-variant flex items-center justify-center font-bold text-on-surface-variant shrink-0">
-                        {att.studentName?.charAt(0)?.toUpperCase() || '?'}
-                      </div>
-                      <div>
-                        <p className="font-body-md font-bold text-on-surface">{att.studentName}</p>
-                        <p className="font-body-sm text-on-surface-variant">{att.studentId}</p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className={`font-label-md px-3 py-1 rounded-full text-xs capitalize ${
-                        att.status === 'late'
-                          ? 'bg-secondary-container/30 text-on-secondary-container'
-                          : 'bg-tertiary-container/20 text-on-tertiary-container'
-                      }`}>
-                        {att.status || 'present'}
-                      </span>
-                      <span className="text-xs text-on-surface-variant whitespace-nowrap">
-                        {att.timestamp?.toDate
-                          ? att.timestamp.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                          : '—'}
-                      </span>
-                    </div>
-                  </div>
-                ))
+                <div className="divide-y divide-outline-variant/20">
+                  <AnimatePresence>
+                    {attendance.map((att, index) => (
+                      <motion.div
+                        key={att.studentId}
+                        initial={{ opacity: 0, x: -20 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        exit={{ opacity: 0 }}
+                        transition={{ duration: 0.3, delay: index * 0.02 }}
+                        className="px-6 py-3 flex items-center gap-4 hover:bg-surface-container-high/50 transition-colors"
+                      >
+                        <div className="w-10 h-10 rounded-full bg-primary-container flex items-center justify-center text-on-primary-container font-bold text-sm">
+                          {att.studentName?.charAt(0)?.toUpperCase() || '?'}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="font-medium text-on-surface truncate">{att.studentName}</p>
+                          <p className="text-xs text-on-surface-variant truncate">{att.studentId}</p>
+                        </div>
+                        <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${
+                          att.status === 'present'
+                            ? 'bg-success-container text-on-success-container'
+                            : att.status === 'late'
+                            ? 'bg-warning-container text-on-warning-container'
+                            : 'bg-error-container text-on-error-container'
+                        }`}>
+                          {att.status || 'present'}
+                        </span>
+                        <span className="text-xs text-on-surface-variant tabular-nums">
+                          {att.timestamp?.toDate
+                            ? att.timestamp.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                            : '—'}
+                        </span>
+                      </motion.div>
+                    ))}
+                  </AnimatePresence>
+                </div>
               )}
             </div>
           </div>
         </div>
 
         {/* Right: QR Code */}
-        <div className="lg:col-span-4">
-          <div className="bg-primary-container p-lg rounded-2xl shadow-xl sticky top-20">
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="text-on-primary-container font-title-lg">QR Code</h3>
-              <div className="bg-secondary-container px-3 py-1 rounded-full flex items-center gap-1.5">
-                <div className="w-3 h-3 border-2 border-on-secondary-container border-t-transparent rounded-full animate-spin"></div>
-                <span className="text-on-secondary-container font-label-md text-sm w-6 text-center">{timeLeft}s</span>
+        <div className="space-y-6">
+          <div className="bg-surface-container rounded-2xl p-6 border border-outline-variant/30 sticky top-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-semibold text-on-surface flex items-center gap-2">
+                <QrCode className="w-5 h-5 text-primary" />
+                QR Code
+              </h3>
+              <div className="flex items-center gap-2">
+                <span className={`w-2 h-2 rounded-full ${isOpen ? 'bg-success animate-pulse' : 'bg-error'}`} />
+                <span className="text-xs text-on-surface-variant">
+                  {isOpen ? 'Active' : 'Inactive'}
+                </span>
               </div>
             </div>
 
-            <div className={`relative bg-white p-4 rounded-xl aspect-square flex items-center justify-center overflow-hidden border-4 border-on-primary-container/20 transition-opacity ${!isOpen ? 'opacity-20 pointer-events-none' : 'opacity-100'}`}>
-              {totpToken ? (
-                <QRCodeSVG
-                  value={qrData}
-                  size={256}
-                  className="w-full h-full"
-                  includeMargin={true}
+            {/* Countdown Timer */}
+            <div className="mb-4">
+              <div className="flex items-center justify-between text-sm mb-1">
+                <span className="text-on-surface-variant">Refreshes in</span>
+                <span className="font-mono font-bold text-primary">{timeLeft}s</span>
+              </div>
+              <div className="w-full bg-surface-container-highest rounded-full h-1.5 overflow-hidden">
+                <motion.div
+                  className="h-full bg-primary rounded-full"
+                  initial={{ width: '100%' }}
+                  animate={{ width: `${(timeLeft / QR_REFRESH_INTERVAL) * 100}%` }}
+                  transition={{ duration: 0.1, ease: 'linear' }}
                 />
-              ) : (
-                <Loader2 className="w-8 h-8 animate-spin text-primary" />
+              </div>
+            </div>
+
+            {/* QR Display */}
+            <div className="relative bg-white rounded-xl p-4 flex items-center justify-center">
+              <AnimatePresence mode="wait">
+                {totpToken && isOpen ? (
+                  <motion.div
+                    key={totpToken}
+                    initial={{ opacity: 0, scale: 0.95 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.95 }}
+                    transition={{ duration: 0.2 }}
+                  >
+                    <QRCodeSVG
+                      value={qrData}
+                      size={240}
+                      level="H"
+                      includeMargin={false}
+                      className="rounded-lg"
+                    />
+                  </motion.div>
+                ) : (
+                  <div className="w-[240px] h-[240px] flex flex-col items-center justify-center text-on-surface-variant">
+                    <Shield className="w-12 h-12 mb-2 opacity-30" />
+                    <p className="text-sm">Session Closed</p>
+                    <p className="text-xs opacity-60">QR code is no longer active</p>
+                  </div>
+                )}
+              </AnimatePresence>
+
+              {/* Refresh indicator overlay */}
+              {isOpen && (
+                <div className="absolute top-2 right-2">
+                  <motion.div
+                    animate={{ rotate: 360 }}
+                    transition={{ duration: 2, repeat: Infinity, ease: 'linear' }}
+                    className="w-6 h-6 rounded-full border-2 border-primary border-t-transparent"
+                  />
+                </div>
               )}
             </div>
+
+            <p className="text-xs text-center text-on-surface-variant mt-4">
+              Token refreshes every {QR_REFRESH_INTERVAL} seconds for security
+            </p>
 
             {!isOpen && (
-              <div className="mt-3 p-3 bg-error/10 rounded-lg text-center">
-                <p className="text-sm font-bold text-error">Session Closed</p>
-                <p className="text-xs text-on-surface-variant mt-1">QR code is no longer active</p>
+              <div className="mt-4 p-3 bg-error-container/50 rounded-xl text-center">
+                <p className="text-sm text-on-error-container font-medium">Session Ended</p>
+                <p className="text-xs text-on-error-container/70 mt-1">
+                  No new check-ins accepted
+                </p>
               </div>
             )}
-
-            <div className="mt-4 space-y-2">
-              <p className="font-body-sm text-on-primary-container/80 flex items-center gap-2 text-sm">
-                <CheckCircle className="w-4 h-4" />
-                Token rotates every 30 seconds
-              </p>
-              {isOpen && (
-                <button
-                  onClick={() => navigator.clipboard?.writeText(qrData).then(() => alert('QR link copied!'))}
-                  className="w-full py-2 bg-on-primary-container text-primary font-bold rounded-xl hover:opacity-90 transition-opacity text-sm"
-                >
-                  Copy QR Link
-                </button>
-              )}
-            </div>
           </div>
         </div>
-
       </div>
+    </div>
+  );
+}
+
+// Stat Card Component
+function StatCard({ icon, label, value, color }: {
+  icon: React.ReactNode;
+  label: string;
+  value: number;
+  color: 'primary' | 'success' | 'warning' | 'error';
+}) {
+  const colorClasses = {
+    primary: 'bg-primary-container text-on-primary-container',
+    success: 'bg-success-container text-on-success-container',
+    warning: 'bg-warning-container text-on-warning-container',
+    error: 'bg-error-container text-on-error-container',
+  };
+
+  return (
+    <div className="bg-surface-container rounded-2xl p-4 border border-outline-variant/30">
+      <div className={`w-10 h-10 rounded-xl ${colorClasses[color]} flex items-center justify-center mb-3`}>
+        {icon}
+      </div>
+      <p className="text-2xl font-bold text-on-surface">{value}</p>
+      <p className="text-xs text-on-surface-variant mt-1">{label}</p>
     </div>
   );
 }
