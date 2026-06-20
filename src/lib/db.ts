@@ -19,62 +19,79 @@ export async function logAudit(user: any, actionType: string, entity: string, de
     actionType,
     entity,
     details,
-    ipAddress: 'device' 
+    ipAddress: 'device'
   });
 }
 
 export async function checkInStudent(sessionId: string, studentData: any, token: string, deviceFingerprint: string) {
-  // Validate student enrollment
-  const enrollmentsQuery = query(collection(db, collections.ENROLLMENTS), where("studentId", "==", studentData.uid));
-  const enrollmentsSnapshot = await getDocs(enrollmentsQuery);
   const sessionDocRef = doc(db, collections.SESSIONS, sessionId);
   const sessionDoc = await getDoc(sessionDocRef);
 
   if (!sessionDoc.exists()) throw new Error('Session not found');
   const sessionData = sessionDoc.data();
-  
+
   if (sessionData.status !== 'open') throw new Error('Session is closed');
 
-  const attendanceRef = doc(db, `${collections.SESSIONS}/${sessionId}/attendance`, studentData.uid);
-  
+  // Use the uid field from the user object (the original student ID like KAB/101/2023)
+  // stored in the 'uid' field of the user document
+  const studentId = studentData.uid || studentData.id;
+  const studentName = studentData.name || 'Unknown Student';
+
+  if (!studentId) throw new Error('Student ID not found. Please log out and log in again.');
+
+  // Use studentId as the document key (sanitize slashes)
+  const attendanceDocId = studentId.replace(/\//g, '_').replace(/\s+/g, '_');
+  const attendanceRef = doc(db, `${collections.SESSIONS}/${sessionId}/attendance`, attendanceDocId);
+
   await runTransaction(db, async (transaction) => {
     const attendanceDoc = await transaction.get(attendanceRef);
     if (attendanceDoc.exists()) {
-      throw new Error('Already marked present');
+      throw new Error('You have already been marked present for this session');
     }
 
-    // Check device fingerprint to prevent double scans from same device for different students
-    // NOTE: This usually means querying collection Group or all attendance in the session,
-    // but transactions require reads before writes on the specific document. 
-    // For simplicity, we just check if student is marked present.
-    
+    const now = new Date();
+    const sessionStart = sessionData.startTime;
+    // Determine if late (after windowMinutes from session start)
+    let status = 'present';
+    try {
+      const [startHour, startMin] = sessionStart.split(':').map(Number);
+      const sessionStartMs = new Date();
+      sessionStartMs.setHours(startHour, startMin, 0, 0);
+      const diffMinutes = (now.getTime() - sessionStartMs.getTime()) / 60000;
+      if (diffMinutes > (sessionData.windowMinutes || 15)) {
+        status = 'late';
+      }
+    } catch (e) {
+      // default to present if time parse fails
+    }
+
     transaction.set(attendanceRef, {
-      studentId: studentData.uid,
-      studentName: studentData.name,
-      studentNumber: studentData.studentNumber || 'Unknown',
+      studentId,
+      studentName,
+      studentEmail: studentData.email || '',
       timestamp: serverTimestamp(),
       deviceFingerprint,
-      status: "present"
+      status
     });
   });
 }
 
 export async function archiveSession(sessionId: string) {
-    const sessionDocRef = doc(db, collections.SESSIONS, sessionId);
-    const sessionDoc = await getDoc(sessionDocRef);
-    if (!sessionDoc.exists()) return;
+  const sessionDocRef = doc(db, collections.SESSIONS, sessionId);
+  const sessionDoc = await getDoc(sessionDocRef);
+  if (!sessionDoc.exists()) return;
 
-    const sessionData = sessionDoc.data();
-    
-    const attendanceQuery = collection(db, `${collections.SESSIONS}/${sessionId}/attendance`);
-    const attendanceSnapshot = await getDocs(attendanceQuery);
-    
-    const attendanceList = attendanceSnapshot.docs.map(d => d.data());
-    
-    const archiveData = {
-        ...sessionData,
-        attendance: attendanceList
-    };
+  const sessionData = sessionDoc.data();
 
-    await uploadJSONToCloudinary(`session_${sessionId}.json`, archiveData);
+  const attendanceQuery = collection(db, `${collections.SESSIONS}/${sessionId}/attendance`);
+  const attendanceSnapshot = await getDocs(attendanceQuery);
+
+  const attendanceList = attendanceSnapshot.docs.map(d => d.data());
+
+  const archiveData = {
+    ...sessionData,
+    attendance: attendanceList
+  };
+
+  await uploadJSONToCloudinary(`session_${sessionId}.json`, archiveData);
 }
