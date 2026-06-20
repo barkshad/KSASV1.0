@@ -1,73 +1,53 @@
-"use client";
+import { useState, useEffect } from 'react';
+import { db, doc, onSnapshot, collection, query, where, getDocs } from '../lib/firebase';
 
-import { useEffect, useState, useCallback } from "react";
-import {
-  subscribeToAttendance,
-  subscribeToSession,
-  subscribeToActiveSessions,
-} from "../lib/db";
-
-export function useLiveAttendance(sessionId: string | null) {
-  const [records, setRecords] = useState<any[]>([]);
-  const [count, setCount] = useState(0);
+export function useFirestoreRealtimeDocument(collectionName: string, docId: string | null) {
+  const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!sessionId) {
+    if (!docId) {
+      setData(null);
       setLoading(false);
       return;
     }
 
-    setLoading(true);
-    const unsubscribe = subscribeToAttendance(sessionId, (data) => {
-      setRecords(data);
-      setCount(data.length);
+    const unsubscribe = onSnapshot(doc(db, collectionName, docId), (docSnap) => {
+      if (docSnap.exists()) {
+        setData({ id: docSnap.id, ...docSnap.data() });
+      } else {
+        setData(null);
+      }
+      setLoading(false);
+    }, (error) => {
+      console.error(`Error fetching ${collectionName}/${docId}:`, error);
       setLoading(false);
     });
 
     return () => unsubscribe();
-  }, [sessionId]);
+  }, [collectionName, docId]);
 
-  return { records, count, loading };
+  return { data, loading };
 }
 
-export function useLiveSession(sessionId: string | null) {
-  const [session, setSession] = useState<any>(null);
+export function useFirestoreRealtimeCollection(collectionPath: string, conditions: any[] = []) {
+  const [data, setData] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!sessionId) {
+    let q = query(collection(db, collectionPath));
+    // Simplistic condition apply
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setData(docs);
       setLoading(false);
-      return;
-    }
-
-    setLoading(true);
-    const unsubscribe = subscribeToSession(sessionId, (data) => {
-      setSession(data);
-      setLoading(false);
-    });
-
-    return () => unsubscribe();
-  }, [sessionId]);
-
-  return { session, loading };
-}
-
-export function useActiveSessions() {
-  const [sessions, setSessions] = useState<any[]>([]);
-  const [count, setCount] = useState(0);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    setLoading(true);
-    const unsubscribe = subscribeToActiveSessions((data) => {
-      setSessions(data);
-      setCount(data.length);
+    }, (error) => {
+      console.error(`Error fetching ${collectionPath}:`, error);
       setLoading(false);
     });
 
     return () => unsubscribe();
-  }, []);
+  }, [collectionPath]);
 
-  return { sessions, count, loading };
+  return { data, loading };
 }

@@ -1,37 +1,42 @@
-"use client";
+import { useState, useEffect } from 'react';
+import { seedAdminIfNotExists } from '../lib/seed-admin';
 
-import { useState, useEffect, useCallback } from "react";
-import { getCurrentUser, logout as authLogout } from "../lib/auth";
+let seeded = false;
+
+// We can cache the parsed user to prevent infinite render loops in case of reference changes
+const getCachedUser = () => {
+    const cachedUser = localStorage.getItem('ksas_current_user');
+    if (cachedUser) {
+        try { return JSON.parse(cachedUser); } catch(e) { return null; }
+    }
+    return null;
+}
 
 export function useAuth() {
-  const [user, setUser] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
+  const [user, setUser] = useState<any>(getCachedUser());
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    const u = getCurrentUser();
-    setUser(u);
-    setLoading(false);
+    // Seed admin once globally in background
+    if (!seeded) {
+        seeded = true;
+        seedAdminIfNotExists().catch(e => {
+            console.error("Failed to seed admin", e);
+        });
+    }
   }, []);
 
-  const logout = useCallback(async () => {
-    await authLogout();
-    setUser(null);
-    window.location.href = "/";
-  }, []);
-
-  const refreshUser = useCallback(() => {
-    const u = getCurrentUser();
-    setUser(u);
-  }, []);
-
-  return {
-    user,
-    loading,
-    logout,
-    refreshUser,
-    isAdmin: user?.role === "admin",
-    isLecturer: user?.role === "lecturer",
-    isStudent: user?.role === "student",
-    isAuthenticated: !!user,
+  const login = (userData: any) => {
+    localStorage.setItem('ksas_current_user', JSON.stringify(userData));
+    setUser(userData);
   };
+
+  const logout = () => {
+    localStorage.removeItem('ksas_current_user');
+    setUser(null);
+    window.location.href = '/';
+  };
+
+  return { user, loading, login, logout };
 }
+

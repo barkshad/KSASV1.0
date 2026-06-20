@@ -1,16 +1,19 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Shield, BookOpen, GraduationCap, ArrowRight, Mail, Lock, Eye, EyeOff, AlertCircle } from 'lucide-react';
-import { login } from '../lib/auth';
+import { Shield, BookOpen, GraduationCap, ArrowRight, ArrowLeft, Lock, Mail, Loader2, Info } from 'lucide-react';
+import { useAuth } from '../hooks/useAuth';
+import { db, collection, query, where, getDocs } from '../lib/firebase';
+import { hashPassword } from '../lib/auth';
 
 export default function RoleSelection() {
   const navigate = useNavigate();
+  const { login } = useAuth();
+  
   const [selectedRole, setSelectedRole] = useState<string | null>(null);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
-  const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
 
   const roles = [
     { id: 'admin', title: 'Admin', icon: Shield, path: '/admin', description: 'System configuration & academic management' },
@@ -18,29 +21,47 @@ export default function RoleSelection() {
     { id: 'student', title: 'Student', icon: GraduationCap, path: '/student', description: 'Check-in to classes & view history' },
   ];
 
-  const handleRoleSelect = (roleId: string) => {
-    setSelectedRole(roleId);
-    setError('');
-  };
+  useEffect(() => {
+    const cachedUser = localStorage.getItem('ksas_current_user');
+    if (cachedUser) {
+        try {
+            const userObj = JSON.parse(cachedUser);
+            if (userObj.role === 'admin') navigate('/admin');
+            else if (userObj.role === 'lecturer') navigate('/lecturer');
+            else if (userObj.role === 'student') navigate('/student');
+        } catch(e){}
+    }
+  }, [navigate]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedRole) {
-      setError('Please select a role');
-      return;
-    }
-    if (!email || !password) {
-      setError('Please enter email and password');
-      return;
-    }
-
+    if (!selectedRole) return;
+    
     setLoading(true);
     setError('');
-
+    
     try {
-      const user = await login(email, password, selectedRole);
-      const rolePath = roles.find(r => r.id === selectedRole)?.path || '/';
-      navigate(rolePath);
+      const usersRef = collection(db, 'users');
+      // Look for the user with this email and role
+      const q = query(usersRef, where('email', '==', email), where('role', '==', selectedRole));
+      const snapshot = await getDocs(q);
+      
+      if (snapshot.empty) {
+        throw new Error('Invalid credentials or role');
+      }
+      
+      const userDoc = snapshot.docs[0];
+      const userData = userDoc.data();
+      
+      if (userData.password !== hashPassword(password)) {
+        throw new Error('Invalid credentials');
+      }
+      
+      // Success
+      login({ uid: userDoc.id, ...userData });
+      const roleObj = roles.find(r => r.id === selectedRole);
+      navigate(roleObj!.path);
+      
     } catch (err: any) {
       setError(err.message || 'Login failed');
     } finally {
@@ -87,106 +108,112 @@ export default function RoleSelection() {
           </div>
         </div>
 
-        {/* Right/Bottom Section: Role Selection + Login */}
+        {/* Right/Bottom Section: Role Selection & Login */}
         <div className="md:w-7/12 p-8 md:p-16 flex flex-col justify-center bg-surface relative">
-          <div className="max-w-[448px] mx-auto w-full space-y-6 relative z-10">
-            <div className="space-y-2 text-center md:text-left">
-              <h2 className="font-headline-lg font-bold text-on-surface">Welcome to KSAS</h2>
-              <p className="font-body-md text-on-surface-variant">Select your role and sign in to access the dashboard</p>
-            </div>
-
-            {/* Role Selection */}
-            <div className="space-y-3">
-              {roles.map((role) => (
-                <button
-                  key={role.id}
-                  onClick={() => handleRoleSelect(role.id)}
-                  className={`w-full flex items-center p-5 rounded-2xl border transition-all group text-left ${
-                    selectedRole === role.id
-                      ? 'bg-primary-container/30 border-primary shadow-md'
-                      : 'bg-surface-container-lowest border-outline-variant/30 hover:border-primary hover:shadow-md hover:bg-surface-container'
-                  }`}
-                >
-                  <div className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 transition-transform ${
-                    selectedRole === role.id ? 'bg-primary text-on-primary scale-110' : 'bg-primary-container text-primary group-hover:scale-110'
-                  }`}>
-                    <role.icon className="w-6 h-6" />
-                  </div>
-                  <div className="ml-4 flex-1">
-                    <h3 className="font-title-lg font-bold text-on-surface">{role.title}</h3>
-                    <p className="font-body-sm text-on-surface-variant mt-0.5">{role.description}</p>
-                  </div>
-                  <ArrowRight className={`w-5 h-5 transition-colors ${
-                    selectedRole === role.id ? 'text-primary' : 'text-outline-variant group-hover:text-primary'
-                  }`} />
-                </button>
-              ))}
-            </div>
-
-            {/* Login Form */}
-            {selectedRole && (
-              <form onSubmit={handleSubmit} className="space-y-4 animate-in fade-in slide-in-from-top-2 duration-300">
-                <div className="relative">
-                  <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-outline w-5 h-5" />
-                  <input
-                    type="email"
-                    placeholder="Email address"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    className="w-full pl-10 pr-4 py-3 bg-surface-container-lowest border border-outline-variant rounded-xl focus:ring-2 focus:ring-primary-container focus:border-primary outline-none transition-all font-body-md"
-                    required
-                  />
+          <div className="max-w-[448px] mx-auto w-full space-y-8 relative z-10">
+            
+            {!selectedRole ? (
+              <>
+                <div className="space-y-2 text-center md:text-left">
+                  <h2 className="font-headline-lg font-bold text-on-surface">Welcome to KSAS</h2>
+                  <p className="font-body-md text-on-surface-variant">Select your role to access the dashboard</p>
                 </div>
 
-                <div className="relative">
-                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-outline w-5 h-5" />
-                  <input
-                    type={showPassword ? 'text' : 'password'}
-                    placeholder="Password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    className="w-full pl-10 pr-12 py-3 bg-surface-container-lowest border border-outline-variant rounded-xl focus:ring-2 focus:ring-primary-container focus:border-primary outline-none transition-all font-body-md"
-                    required
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-outline hover:text-primary transition-colors"
+                <div className="grid gap-4 mt-8 animate-in fade-in duration-500">
+                  {roles.map((role, idx) => (
+                    <button
+                      key={role.id}
+                      onClick={() => setSelectedRole(role.id)}
+                      className="group flex flex-col sm:flex-row items-center sm:items-start p-5 sm:p-6 rounded-[24px] bg-surface-container-lowest border border-outline-variant/50 hover:border-primary/40 hover:bg-surface-container-low transition-all duration-300 text-left focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:ring-offset-surface shadow-sm hover:shadow-md"
+                      style={{ animationDelay: `${idx * 100}ms` }}
+                    >
+                      <div className="w-16 h-16 rounded-2xl bg-primary/10 text-primary flex items-center justify-center shrink-0 mb-4 sm:mb-0 group-hover:scale-105 group-hover:bg-primary group-hover:text-on-primary transition-all duration-300">
+                        <role.icon className="w-8 h-8" />
+                      </div>
+                      
+                      <div className="sm:ml-6 flex-1 text-center sm:text-left">
+                        <h3 className="text-xl font-bold text-on-surface group-hover:text-primary transition-colors">{role.title}</h3>
+                        <p className="font-body-sm text-on-surface-variant mt-1.5 leading-relaxed">{role.description}</p>
+                      </div>
+
+                      <div className="hidden sm:flex mt-4 sm:mt-0 items-center justify-center w-10 h-10 rounded-full bg-surface-container text-primary opacity-0 group-hover:opacity-100 -translate-x-2 group-hover:translate-x-0 transition-all duration-300">
+                        <ArrowRight className="w-5 h-5" />
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </>
+            ) : (
+               <div className="animate-in slide-in-from-right-8 duration-300 space-y-6">
+                  <button 
+                    onClick={() => {
+                      setSelectedRole(null);
+                      setError('');
+                      setPassword('');
+                    }}
+                    className="flex items-center text-primary font-bold text-sm mb-6 hover:underline"
                   >
-                    {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                    <ArrowLeft className="w-4 h-4 mr-2" /> Back to Roles
                   </button>
-                </div>
-
-                {error && (
-                  <div className="flex items-center gap-2 text-error bg-error-container/30 px-4 py-2 rounded-lg animate-in fade-in">
-                    <AlertCircle className="w-4 h-4 shrink-0" />
-                    <span className="font-body-sm">{error}</span>
+                  
+                  <div className="space-y-2">
+                    <h2 className="font-headline-md font-bold text-on-surface capitalize">{selectedRole} Login</h2>
+                    <p className="font-body-md text-on-surface-variant">Enter your credentials to continue</p>
                   </div>
-                )}
 
-                <button
-                  type="submit"
-                  disabled={loading}
-                  className="w-full py-3 bg-primary text-on-primary rounded-xl font-bold font-label-md uppercase tracking-wider hover:bg-primary-container hover:text-on-primary-container transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                >
-                  {loading ? (
-                    <>
-                      <div className="w-5 h-5 border-2 border-on-primary border-t-transparent rounded-full animate-spin"></div>
-                      Signing in...
-                    </>
-                  ) : (
-                    <>
-                      Sign In
-                      <ArrowRight className="w-5 h-5" />
-                    </>
+                  {error && (
+                    <div className="bg-error/10 text-error p-4 rounded-xl flex items-start gap-3">
+                       <Info className="w-5 h-5 shrink-0 mt-0.5" />
+                       <span className="text-sm font-medium">{error}</span>
+                    </div>
                   )}
-                </button>
 
-                <p className="text-center text-xs text-on-surface-variant">
-                  Default Admin: <span className="font-mono text-primary">admin@kabarak.ac.ke</span> / <span className="font-mono text-primary">Mwahanga@1</span>
-                </p>
-              </form>
+                  <form onSubmit={handleLogin} className="space-y-5">
+                    <div className="space-y-1">
+                      <label className="text-sm font-bold text-on-surface">Email Address</label>
+                      <div className="relative">
+                        <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                          <Mail className="w-5 h-5 text-on-surface-variant/50" />
+                        </div>
+                        <input 
+                          type="email" 
+                          required
+                          value={email}
+                          onChange={(e) => setEmail(e.target.value)}
+                          className="w-full bg-surface-container border border-outline-variant/50 rounded-xl py-3 pl-12 pr-4 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all text-on-surface"
+                          placeholder="your.email@kabarak.ac.ke"
+                        />
+                      </div>
+                    </div>
+                    
+                    <div className="space-y-1">
+                      <label className="text-sm font-bold text-on-surface">Password <span className="text-xs text-on-surface-variant font-normal tracking-wide ml-1">(Default is 123456)</span></label>
+                      <div className="relative">
+                        <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                          <Lock className="w-5 h-5 text-on-surface-variant/50" />
+                        </div>
+                        <input 
+                          type="password" 
+                          required
+                          value={password}
+                          onChange={(e) => setPassword(e.target.value)}
+                          className="w-full bg-surface-container border border-outline-variant/50 rounded-xl py-3 pl-12 pr-4 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all text-on-surface"
+                          placeholder="••••••••"
+                        />
+                      </div>
+                    </div>
+
+                    <button 
+                      type="submit" 
+                      disabled={loading}
+                      className="w-full bg-primary text-on-primary py-4 rounded-xl font-bold flex items-center justify-center hover:bg-primary/90 transition-all disabled:opacity-70 mt-2"
+                    >
+                      {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : 'Secure Login'}
+                    </button>
+                  </form>
+               </div>
             )}
+            
           </div>
         </div>
       </div>

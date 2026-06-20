@@ -1,159 +1,158 @@
-import React, { useState, useEffect } from 'react';
+import React, { useMemo } from 'react';
+import { Radio, StopCircle, QrCode, PlusCircle, AlertCircle, FileBarChart, Calendar, MapPin, Loader2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { Radio, StopCircle, QrCode, PlusCircle, AlertCircle, FileBarChart, Calendar, MapPin } from 'lucide-react';
-import { getSessionsByLecturer, getUserById, closeSession, getEnrollmentsByCourse } from '../../lib/db';
-import { getCurrentUser } from '../../lib/auth';
-import { useLiveAttendance } from '../../hooks/useFirestoreRealtime';
+import { useAuth } from '../../hooks/useAuth';
+import { useFirestoreRealtimeCollection } from '../../hooks/useFirestoreRealtime';
+import { db, collection, addDoc, serverTimestamp, doc, updateDoc } from '../../lib/firebase';
+import { collections, archiveSession } from '../../lib/db';
+import { generateSessionTOTPSecret } from '../../lib/totp';
 
 export default function LecturerDashboard() {
   const navigate = useNavigate();
-  const [activeSession, setActiveSession] = useState<any>(null);
-  const [upcomingSessions, setUpcomingSessions] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const user = getCurrentUser();
+  const { user } = useAuth();
+  
+  // Realtime active sessions for this lecturer
+  const { data: allSessions, loading: loadingSessions } = useFirestoreRealtimeCollection(collections.SESSIONS);
+  
+  const activeSession = useMemo(() => {
+    return allSessions.find(s => s.lecturerId === user?.uid && s.status === 'open');
+  }, [allSessions, user]);
 
-  const { count: liveCount, records: liveRecords } = useLiveAttendance(activeSession?.id || null);
-  const [enrolledCount, setEnrolledCount] = useState(50);
+  const [starting, setStarting] = React.useState(false);
 
-  useEffect(() => {
-    async function loadData() {
-      if (!user?.uid) return;
-      try {
-        const sessions = await getSessionsByLecturer(user.uid);
-        const active = sessions.find((s: any) => s.status === 'open');
-        const upcoming = sessions.filter((s: any) => s.status !== 'open').slice(0, 3);
+  const [attendanceCount, setAttendanceCount] = React.useState(0);
 
-        setActiveSession(active || null);
-        setUpcomingSessions(upcoming);
-
-        if (active) {
-          const enrollments = await getEnrollmentsByCourse(active.courseId);
-          setEnrolledCount(enrollments.length);
-        }
-      } catch (e) {
-        console.error('Failed to load lecturer data:', e);
-      } finally {
-        setLoading(false);
+  // Quick listener for the active session's attendance
+  React.useEffect(() => {
+      if (!activeSession?.id) {
+          setAttendanceCount(0);
+          return;
       }
-    }
+      // Simple fetch for dashboard count
+      import('../../lib/firebase').then(({ getDocs, query }) => {
+          getDocs(query(collection(db, `${collections.SESSIONS}/${activeSession.id}/attendance`))).then(snap => {
+             setAttendanceCount(snap.docs.length);
+          });
+      });
+  }, [activeSession?.id]);
 
-    loadData();
-  }, [user?.uid]);
+  const handleStartSession = async (courseCode: string, courseName: string, room: string) => {
+    setStarting(true);
+    try {
+        const secret = generateSessionTOTPSecret();
+        const dateStr = new Date().toISOString().split('T')[0];
+        const newSessionRef = await addDoc(collection(db, collections.SESSIONS), {
+            courseCode,
+            courseName,
+            lecturerId: user?.uid,
+            room,
+            date: dateStr,
+            startTime: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}),
+            endTime: new Date(Date.now() + 2 * 60 * 60 * 1000).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}),
+            windowMinutes: 15,
+            status: "open",
+            totpSecret: secret,
+            enrolledCount: 50, // mock fallback
+            createdAt: serverTimestamp()
+        });
+
+        navigate(`/lecturer/live?sessionId=${newSessionRef.id}`);
+    } catch (err) {
+        console.error("Failed to start session", err);
+        alert("Failed to start session.");
+    } finally {
+        setStarting(false);
+    }
+  };
 
   const handleEndSession = async () => {
-    if (!activeSession?.id) return;
-    if (!confirm('Are you sure you want to end this session?')) return;
-    try {
-      await closeSession(activeSession.id);
-      setActiveSession(null);
-    } catch (e) {
-      console.error('Failed to end session:', e);
-    }
+      if (!activeSession) return;
+      if (confirm('End this session? Data will be archived.')) {
+          await updateDoc(doc(db, collections.SESSIONS, activeSession.id), { status: 'closed' });
+          await archiveSession(activeSession.id);
+      }
   };
 
-  const handleStartSession = async (courseId: string) => {
-    // Navigate to live session with course pre-selected
-    navigate('/lecturer/live', { state: { courseId } });
-  };
-
-  const displayCount = activeSession ? liveCount : 0;
-  const displayTotal = activeSession ? enrolledCount : 50;
-  const displayPercent = displayTotal > 0 ? Math.round((displayCount / displayTotal) * 100) : 0;
+  if (loadingSessions) {
+      return <div className="flex h-screen items-center justify-center"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>;
+  }
 
   return (
     <div className="max-w-[1280px] mx-auto px-margin-mobile md:px-gutter py-8 animate-in fade-in duration-500">
       <div className="mb-8">
-        <h1 className="font-headline-lg text-on-surface mb-2">
-          {user?.name ? `Welcome back, ${user.name}` : 'Welcome back, Dr. Lecturer'}
-        </h1>
+        <h1 className="font-headline-lg text-on-surface mb-2">Welcome back, {user?.name || 'Dr. Lecturer'}</h1>
         <p className="font-body-md text-on-surface-variant">Here is an overview of your sessions and attendance today.</p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-12 gap-lg">
         
         {/* Active Session Card */}
-        <div className="md:col-span-8 glass-card rounded-xl p-6 border-l-4 border-l-tertiary-fixed-dim relative overflow-hidden bg-white/80">
-          <div className="absolute top-0 right-0 p-4 opacity-10">
-            <Radio className="w-32 h-32" />
-          </div>
-          
-          <div className="relative z-10 flex flex-col h-full justify-between">
-             <div>
-                <div className="flex items-center space-x-2 mb-4">
-                  <span className="flex h-3 w-3 relative">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-tertiary-fixed-dim opacity-75"></span>
-                    <span className="relative inline-flex rounded-full h-3 w-3 bg-tertiary-container"></span>
-                  </span>
-                  <span className="font-label-md text-on-surface-variant uppercase tracking-wider">
-                    {activeSession ? 'Active Session Ongoing' : 'No Active Session'}
-                  </span>
-                </div>
-                <h2 className="font-title-lg text-on-surface mb-1">
-                  {activeSession ? activeSession.courseName : 'Introduction to Computer Science (CSC 101)'}
-                </h2>
-                <p className="font-body-md text-on-surface-variant mb-6">
-                  {activeSession 
-                    ? `Room: ${activeSession.room || 'TBD'} • Started at ${activeSession.startTime || '09:00 AM'}`
-                    : 'Room: Science Lab 3 • No session active'}
-                </p>
-
-                <div className="flex items-end space-x-8 mb-8">
-                  <div>
-                     <span className="font-display-lg text-primary block leading-none">
-                       {displayCount}<span className="font-title-lg text-on-surface-variant">/{displayTotal}</span>
-                     </span>
-                     <span className="font-label-md text-on-surface-variant mt-2 block">STUDENTS CHECKED IN</span>
+        <div className="md:col-span-8 glass-card rounded-xl p-6 border-l-4 border-l-tertiary-fixed-dim relative overflow-hidden bg-white/80 min-h-[300px]">
+          {activeSession ? (
+              <>
+                  <div className="absolute top-0 right-0 p-4 opacity-10">
+                    <Radio className="w-32 h-32" />
                   </div>
-                  <div className="h-16 flex-1 flex flex-col justify-end">
-                     <div className="w-full bg-surface-variant rounded-full h-2.5 overflow-hidden">
-                       <div 
-                         className="bg-tertiary-container h-full rounded-full transition-all duration-500" 
-                         style={{ width: `${displayPercent}%` }}
-                       ></div>
+                  
+                  <div className="relative z-10 flex flex-col h-full justify-between">
+                     <div>
+                        <div className="flex items-center space-x-2 mb-4">
+                          <span className="flex h-3 w-3 relative">
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-tertiary-fixed-dim opacity-75"></span>
+                            <span className="relative inline-flex rounded-full h-3 w-3 bg-tertiary-container"></span>
+                          </span>
+                          <span className="font-label-md text-on-surface-variant uppercase tracking-wider">Active Session Ongoing</span>
+                        </div>
+                        <h2 className="font-title-lg text-on-surface mb-1">{activeSession.courseName} ({activeSession.courseCode})</h2>
+                        <p className="font-body-md text-on-surface-variant mb-6">Room: {activeSession.room} • Started at {activeSession.startTime}</p>
+
+                        <div className="flex items-end space-x-8 mb-8">
+                          <div>
+                             <span className="font-display-lg text-primary block leading-none">{attendanceCount}<span className="font-title-lg text-on-surface-variant">/{activeSession.enrolledCount || 50}</span></span>
+                             <span className="font-label-md text-on-surface-variant mt-2 block">STUDENTS CHECKED IN</span>
+                          </div>
+                          <div className="h-16 flex-1 flex flex-col justify-end">
+                             <div className="w-full bg-surface-variant rounded-full h-2.5 overflow-hidden">
+                               <div className="bg-tertiary-container h-full rounded-full" style={{ width: `${Math.min(100, (attendanceCount / (activeSession.enrolledCount || 50)) * 100)}%` }}></div>
+                             </div>
+                          </div>
+                        </div>
+                     </div>
+
+                     <div className="flex flex-wrap gap-4">
+                        <button 
+                          onClick={handleEndSession}
+                          className="bg-error text-on-error px-6 py-3 rounded-lg font-body-md font-semibold hover:opacity-90 transition-opacity flex items-center space-x-2 active:scale-95"
+                        >
+                           <StopCircle className="w-5 h-5" />
+                           <span>End Session</span>
+                        </button>
+                        <button 
+                          onClick={() => navigate(`/lecturer/live?sessionId=${activeSession.id}`)}
+                          className="bg-surface-variant text-on-surface-variant px-6 py-3 rounded-lg font-body-md font-semibold hover:bg-surface-container-high transition-colors flex items-center space-x-2 active:scale-95"
+                        >
+                           <QrCode className="w-5 h-5" />
+                           <span>Show QR</span>
+                        </button>
                      </div>
                   </div>
-                </div>
-             </div>
-
-             <div className="flex flex-wrap gap-4">
-                {activeSession ? (
-                  <>
-                    <button 
-                      onClick={handleEndSession}
-                      className="bg-error text-on-error px-6 py-3 rounded-lg font-body-md font-semibold hover:opacity-90 transition-opacity flex items-center space-x-2 active:scale-95"
-                    >
-                       <StopCircle className="w-5 h-5" />
-                       <span>End Session</span>
-                    </button>
-                    <button 
-                      onClick={() => navigate('/lecturer/live')}
-                      className="bg-surface-variant text-on-surface-variant px-6 py-3 rounded-lg font-body-md font-semibold hover:bg-surface-container-high transition-colors flex items-center space-x-2 active:scale-95"
-                    >
-                       <QrCode className="w-5 h-5" />
-                       <span>Show QR</span>
-                    </button>
-                  </>
-                ) : (
-                  <button 
-                    onClick={() => navigate('/lecturer/courses')}
-                    className="bg-primary text-on-primary px-6 py-3 rounded-lg font-body-md font-semibold hover:opacity-90 transition-opacity flex items-center space-x-2 active:scale-95"
-                  >
-                     <PlusCircle className="w-5 h-5" />
-                     <span>Start New Session</span>
-                  </button>
-                )}
-             </div>
-          </div>
+              </>
+          ) : (
+              <div className="h-full flex items-center justify-center flex-col text-on-surface-variant text-center opacity-80">
+                  <div className="w-16 h-16 rounded-full bg-surface-variant/30 flex items-center justify-center mb-4">
+                      <StopCircle className="w-8 h-8 text-on-surface-variant" />
+                  </div>
+                  <h3 className="font-title-lg font-bold mb-2">No Active Session</h3>
+                  <p>Start a session from your schedule to begin accepting check-ins.</p>
+              </div>
+          )}
         </div>
 
         {/* Quick Actions Grid */}
         <div className="md:col-span-4 glass-card rounded-xl p-6 flex flex-col bg-white/80">
            <h3 className="font-title-lg text-on-surface mb-6">Quick Actions</h3>
            <div className="grid grid-cols-2 gap-4 flex-1">
-             <button 
-               onClick={() => navigate('/lecturer/courses')}
-               className="bg-surface hover:bg-surface-variant border border-outline-variant rounded-xl p-4 flex flex-col items-center justify-center text-center transition-colors group"
-             >
+             <button className="bg-surface hover:bg-surface-variant border border-outline-variant rounded-xl p-4 flex flex-col items-center justify-center text-center transition-colors group">
                 <div className="w-12 h-12 rounded-full bg-primary-container/20 text-primary-container flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
                    <PlusCircle className="w-6 h-6" />
                 </div>
@@ -180,85 +179,46 @@ export default function LecturerDashboard() {
            </div>
         </div>
 
-        {/* Upcoming Classes */}
+        {/* Upcoming Classes / Ad-hoc Session */}
         <div className="md:col-span-6 glass-card rounded-xl p-6 bg-white/80">
           <div className="flex items-center justify-between mb-6">
-             <h3 className="font-title-lg text-on-surface">Today's Schedule</h3>
-             <button className="text-primary font-label-md hover:underline">View All</button>
+             <h3 className="font-title-lg text-on-surface">Start New Session</h3>
           </div>
           <div className="space-y-4">
-            {loading ? (
-              <p className="text-sm text-on-surface-variant">Loading schedule...</p>
-            ) : upcomingSessions.length === 0 ? (
-              <>
-                <div className="flex items-center justify-between p-4 rounded-lg border border-outline-variant bg-surface hover:bg-surface-variant/50 transition-colors">
-                   <div className="flex items-center space-x-4">
-                      <div className="flex flex-col items-center justify-center bg-surface-container w-16 h-16 rounded-lg text-center">
-                        <span className="font-title-lg font-bold text-on-surface leading-none">11</span>
-                        <span className="font-label-md text-on-surface-variant">AM</span>
-                      </div>
-                      <div>
-                        <h4 className="font-title-lg text-on-surface text-sm md:text-base">Data Structures (CSC 201)</h4>
-                        <p className="font-body-sm text-on-surface-variant flex items-center mt-1">
-                          <MapPin className="w-4 h-4 mr-1" /> Room 104
-                        </p>
-                      </div>
-                   </div>
-                   <button 
-                     onClick={() => handleStartSession('csc201')}
-                     className="bg-primary text-on-primary px-4 py-2 rounded-md font-label-md hover:opacity-90 transition-opacity"
-                   >
-                     Start
-                   </button>
-                </div>
-                <div className="flex items-center justify-between p-4 rounded-lg border border-outline-variant bg-surface hover:bg-surface-variant/50 transition-colors">
-                   <div className="flex items-center space-x-4">
-                      <div className="flex flex-col items-center justify-center bg-surface-container w-16 h-16 rounded-lg text-center">
-                        <span className="font-title-lg font-bold text-on-surface leading-none">02</span>
-                        <span className="font-label-md text-on-surface-variant">PM</span>
-                      </div>
-                      <div>
-                        <h4 className="font-title-lg text-on-surface text-sm md:text-base">Software Eng. (SE 301)</h4>
-                        <p className="font-body-sm text-on-surface-variant flex items-center mt-1">
-                          <MapPin className="w-4 h-4 mr-1" /> Main Hall
-                        </p>
-                      </div>
-                   </div>
-                   <button className="bg-surface-variant text-on-surface-variant px-4 py-2 rounded-md font-label-md cursor-not-allowed">Start</button>
-                </div>
-              </>
-            ) : (
-              upcomingSessions.map((session: any) => (
-                <div key={session.id} className="flex items-center justify-between p-4 rounded-lg border border-outline-variant bg-surface hover:bg-surface-variant/50 transition-colors">
-                   <div className="flex items-center space-x-4">
-                      <div className="flex flex-col items-center justify-center bg-surface-container w-16 h-16 rounded-lg text-center">
-                        <span className="font-title-lg font-bold text-on-surface leading-none">
-                          {session.startTime ? session.startTime.split(':')[0] : '--'}
-                        </span>
-                        <span className="font-label-md text-on-surface-variant">
-                          {session.startTime ? (parseInt(session.startTime.split(':')[0]) >= 12 ? 'PM' : 'AM') : '--'}
-                        </span>
-                      </div>
-                      <div>
-                        <h4 className="font-title-lg text-on-surface text-sm md:text-base">{session.courseName}</h4>
-                        <p className="font-body-sm text-on-surface-variant flex items-center mt-1">
-                          <MapPin className="w-4 h-4 mr-1" /> {session.room || 'TBD'}
-                        </p>
-                      </div>
-                   </div>
-                   <button 
-                     onClick={() => handleStartSession(session.courseId)}
-                     className="bg-primary text-on-primary px-4 py-2 rounded-md font-label-md hover:opacity-90 transition-opacity"
-                   >
-                     Start
-                   </button>
-                </div>
-              ))
-            )}
+             {activeSession ? (
+                 <div className="p-4 rounded-lg border border-outline-variant bg-surface-variant flex items-center justify-center text-on-surface-variant font-bold">
+                     An active session is currently running. End it to start a new one.
+                 </div>
+             ) : (
+                 <form 
+                   onSubmit={(e) => {
+                     e.preventDefault();
+                     const fd = new FormData(e.currentTarget);
+                     handleStartSession(fd.get('code') as string, fd.get('name') as string, fd.get('room') as string);
+                   }}
+                   className="space-y-4"
+                 >
+                     <div>
+                       <label className="block text-sm font-bold mb-1">Course Code</label>
+                       <input name="code" required placeholder="e.g. COMP 201" className="w-full p-2 rounded bg-surface-container border border-outline-variant" />
+                     </div>
+                     <div>
+                       <label className="block text-sm font-bold mb-1">Course Name</label>
+                       <input name="name" required placeholder="e.g. Data Structures" className="w-full p-2 rounded bg-surface-container border border-outline-variant" />
+                     </div>
+                     <div>
+                       <label className="block text-sm font-bold mb-1">Room / Venue</label>
+                       <input name="room" required placeholder="e.g. Room 104" className="w-full p-2 rounded bg-surface-container border border-outline-variant" />
+                     </div>
+                     <button type="submit" disabled={starting} className="w-full bg-primary text-on-primary px-4 py-3 rounded-lg font-bold hover:opacity-90 transition-opacity flex items-center justify-center mt-4">
+                         {starting ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Start Session'}
+                     </button>
+                 </form>
+             )}
           </div>
         </div>
 
-        {/* Weekly Attendance Trend */}
+        {/* Weekly Attendance Trend Faux Chart */}
         <div className="md:col-span-6 glass-card rounded-xl p-6 flex flex-col bg-white/80">
           <div className="flex items-center justify-between mb-6">
              <h3 className="font-title-lg text-on-surface">Weekly Attendance Trend</h3>
