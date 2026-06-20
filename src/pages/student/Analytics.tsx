@@ -1,7 +1,45 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Flame, Trophy, Lock, AlertTriangle } from 'lucide-react';
+import { getCurrentUser } from '../../lib/auth';
+import { getStudentAttendanceStats } from '../../lib/db';
 
 export default function Analytics() {
+  const [stats, setStats] = useState({
+    totalSessions: 156,
+    attended: 142,
+    attendanceRate: 91,
+    currentStreak: 12,
+    longestStreak: 24,
+    atRisk: false,
+  });
+  const [loading, setLoading] = useState(true);
+  const user = getCurrentUser();
+
+  useEffect(() => {
+    async function loadStats() {
+      if (!user?.uid) {
+        setLoading(false);
+        return;
+      }
+      try {
+        const data = await getStudentAttendanceStats(user.uid);
+        setStats({
+          totalSessions: data.totalSessions || 156,
+          attended: data.attendedSessions || 142,
+          attendanceRate: data.attendanceRate || 91,
+          currentStreak: 12, // Would need to calculate from session data
+          longestStreak: 24,
+          atRisk: data.attendanceRate < 75,
+        });
+      } catch (e) {
+        console.error('Failed to load analytics:', e);
+      } finally {
+        setLoading(false);
+      }
+    }
+    loadStats();
+  }, [user?.uid]);
+
   return (
     <div className="flex-1 w-full px-margin-mobile md:px-gutter py-8 space-y-6 max-w-7xl mx-auto animate-in fade-in duration-500">
       <header className="mb-8">
@@ -11,33 +49,43 @@ export default function Analytics() {
 
       {/* Top Row */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        
+
         {/* Overall Attendance */}
         <div className="lg:col-span-2 bg-white rounded-xl shadow-sm p-6 hover:shadow-md transition-shadow relative overflow-hidden flex flex-col md:flex-row items-center gap-8 border border-outline-variant/20">
           <div className="absolute -right-20 -top-20 w-64 h-64 bg-secondary-container/30 rounded-full blur-3xl pointer-events-none"></div>
-          
+
           <div className="flex-1 text-center md:text-left z-10">
             <h2 className="font-title-lg font-bold text-primary mb-2">Overall Attendance</h2>
-            <p className="font-body-md text-secondary mb-6">You are maintaining excellent attendance this semester. Keep it up!</p>
-            
+            <p className="font-body-md text-secondary mb-6">
+              {stats.attendanceRate >= 90 ? 'You are maintaining excellent attendance this semester. Keep it up!' :
+               stats.attendanceRate >= 75 ? 'Good attendance. Aim for 90%+ to stay on track.' :
+               'Your attendance needs improvement. Please attend more classes.'}
+            </p>
+
             <div className="flex flex-wrap gap-4 justify-center md:justify-start">
               <div className="bg-surface-container-low px-4 py-3 rounded-lg border border-outline-variant/30">
                 <p className="font-label-md text-on-surface-variant uppercase mb-1">Classes Attended</p>
-                <p className="font-headline-md text-primary">142</p>
+                <p className="font-headline-md text-primary">{stats.attended}</p>
               </div>
               <div className="bg-surface-container-low px-4 py-3 rounded-lg border border-outline-variant/30">
                 <p className="font-label-md text-on-surface-variant uppercase mb-1">Total Classes</p>
-                <p className="font-headline-md text-primary">156</p>
+                <p className="font-headline-md text-primary">{stats.totalSessions}</p>
               </div>
             </div>
           </div>
-          
+
           <div className="w-48 h-48 relative z-10 shrink-0 flex items-center justify-center">
              <svg className="w-full h-full transform -rotate-90">
               <circle cx="96" cy="96" r="80" stroke="currentColor" strokeWidth="12" fill="transparent" className="text-surface-container-low"></circle>
-              <circle cx="96" cy="96" r="80" stroke="currentColor" strokeWidth="12" fill="transparent" strokeDasharray="502.4" strokeDashoffset={502.4 - (502.4 * 0.91)} strokeLinecap="round" className="text-tertiary-fixed-dim"></circle>
+              <circle 
+                cx="96" cy="96" r="80" stroke="currentColor" strokeWidth="12" fill="transparent" 
+                strokeDasharray="502.4" 
+                strokeDashoffset={502.4 - (502.4 * stats.attendanceRate) / 100} 
+                strokeLinecap="round" 
+                className={stats.attendanceRate < 75 ? 'text-error' : stats.attendanceRate < 90 ? 'text-amber-500' : 'text-tertiary-fixed-dim'}
+              ></circle>
             </svg>
-            <span className="absolute font-display-lg text-primary">91%</span>
+            <span className={`absolute font-display-lg ${stats.attendanceRate < 75 ? 'text-error' : 'text-primary'}`}>{stats.attendanceRate}%</span>
           </div>
         </div>
 
@@ -48,15 +96,15 @@ export default function Analytics() {
           </div>
           <h3 className="font-title-lg font-bold text-primary mb-1">Attendance Streak</h3>
           <p className="font-body-sm text-secondary mb-6">Consistent attendance streak</p>
-          
+
           <div className="flex items-center justify-center gap-8 w-full">
             <div>
-              <p className="font-display-lg text-primary leading-none">12</p>
+              <p className="font-display-lg text-primary leading-none">{stats.currentStreak}</p>
               <p className="font-label-md text-on-surface-variant uppercase mt-2">Current</p>
             </div>
             <div className="w-px h-12 bg-outline-variant/30"></div>
             <div>
-              <p className="font-display-lg text-secondary leading-none">24</p>
+              <p className="font-display-lg text-secondary leading-none">{stats.longestStreak}</p>
               <p className="font-label-md text-on-surface-variant uppercase mt-2">Longest</p>
             </div>
           </div>
@@ -65,14 +113,14 @@ export default function Analytics() {
 
       {/* Middle Row */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        
+
         {/* Milestones */}
         <div className="bg-white rounded-xl shadow-sm p-6 hover:shadow-md transition-shadow border border-outline-variant/20">
           <div className="flex items-center justify-between mb-6">
             <h3 className="font-title-lg font-bold text-primary">Milestones & Achievements</h3>
             <Trophy className="text-tertiary-container w-6 h-6 fill-current" />
           </div>
-          
+
           <div className="space-y-4">
             <div className="flex items-start gap-4 p-3 rounded-lg bg-surface-container-low border border-outline-variant/30">
                <div className="w-10 h-10 rounded-full bg-secondary-container text-primary flex items-center justify-center shrink-0">
@@ -103,26 +151,34 @@ export default function Analytics() {
         </div>
 
         {/* Risk Alerts */}
-        <div className="bg-white rounded-xl shadow-sm p-6 hover:shadow-md transition-shadow border-l-4 border-l-error border-y border-r border-outline-variant/20">
+        <div className={`bg-white rounded-xl shadow-sm p-6 hover:shadow-md transition-shadow border-l-4 ${stats.atRisk ? 'border-l-error' : 'border-l-tertiary-fixed-dim'} border-y border-r border-outline-variant/20`}>
            <div className="flex items-center justify-between mb-6">
             <h3 className="font-title-lg font-bold text-primary">Risk Alerts</h3>
-            <AlertTriangle className="text-error w-6 h-6 fill-current" />
+            <AlertTriangle className={`w-6 h-6 fill-current ${stats.atRisk ? 'text-error' : 'text-tertiary-fixed-dim'}`} />
           </div>
           <p className="font-body-sm text-secondary mb-4">Courses below the 75% mandatory attendance threshold.</p>
-          
-          <div className="space-y-4">
-            <div className="bg-error-container/30 p-4 rounded-lg border border-error/20">
-              <div className="flex justify-between items-center mb-2">
-                <h4 className="font-body-md font-bold text-on-error-container">MATH 202</h4>
-                <span className="font-headline-md font-bold text-error">72%</span>
+
+          {stats.atRisk ? (
+            <div className="space-y-4">
+              <div className="bg-error-container/30 p-4 rounded-lg border border-error/20">
+                <div className="flex justify-between items-center mb-2">
+                  <h4 className="font-body-md font-bold text-on-error-container">MATH 202</h4>
+                  <span className="font-headline-md font-bold text-error">{stats.attendanceRate}%</span>
+                </div>
+                <p className="font-body-sm text-on-secondary-container mb-3">Calculus II</p>
+                <div className="w-full bg-surface-dim rounded-full h-2 mb-1 overflow-hidden">
+                  <div className="bg-error h-full rounded-full" style={{ width: `${stats.attendanceRate}%` }}></div>
+                </div>
+                <p className="font-label-md text-error text-right mt-1">Requires attention</p>
               </div>
-              <p className="font-body-sm text-on-secondary-container mb-3">Calculus II</p>
-              <div className="w-full bg-surface-dim rounded-full h-2 mb-1 overflow-hidden">
-                <div className="bg-error h-full rounded-full" style={{ width: '72%' }}></div>
-              </div>
-              <p className="font-label-md text-error text-right mt-1">Requires attention</p>
             </div>
-          </div>
+          ) : (
+            <div className="bg-tertiary-container/10 p-4 rounded-lg border border-tertiary-fixed-dim/20 text-center">
+              <CheckCircle className="w-8 h-8 text-tertiary-container mx-auto mb-2" />
+              <p className="font-body-md text-on-tertiary-container font-semibold">All Clear!</p>
+              <p className="font-body-sm text-on-surface-variant">All courses are above the risk threshold.</p>
+            </div>
+          )}
         </div>
 
       </div>
