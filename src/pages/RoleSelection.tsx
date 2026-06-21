@@ -1,78 +1,83 @@
 /**
  * src/pages/RoleSelection.tsx
- * Landing page and login screen.
- * - No default password hints displayed
- * - Polished responsive layout
+ * KSAS Login — modern, mobile-first, brand-consistent.
+ * Zero default-password hints anywhere in UI.
  */
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import {
-  Shield, BookOpen, GraduationCap, ArrowRight, ArrowLeft,
-  Lock, Mail, Loader2, AlertCircle, ShieldCheck,
-} from 'lucide-react';
+import { Shield, BookOpen, GraduationCap, ArrowRight, ArrowLeft, Lock, Mail, Loader2, AlertCircle, ShieldCheck, Eye, EyeOff } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import { db, collection, query, where, getDocs } from '../lib/firebase';
 import { hashPassword } from '../lib/auth';
 
-const roles = [
+const ROLES = [
   {
-    id: 'admin',
+    id: 'admin' as const,
     title: 'Administrator',
+    subtitle: 'System management & analytics',
     icon: Shield,
     path: '/admin',
-    description: 'System configuration, user management, and institutional analytics.',
-    color: 'bg-primary-container text-on-primary-container',
+    accent: 'from-primary to-primary-hover',
     iconBg: 'bg-primary',
-    iconText: 'text-on-primary',
   },
   {
-    id: 'lecturer',
+    id: 'lecturer' as const,
     title: 'Lecturer',
+    subtitle: 'Sessions, QR codes & attendance',
     icon: BookOpen,
     path: '/lecturer',
-    description: 'Manage course sessions, generate QR codes, and track attendance.',
-    color: 'bg-secondary-container text-on-secondary-container',
+    accent: 'from-secondary to-amber-700',
     iconBg: 'bg-secondary',
-    iconText: 'text-on-secondary',
   },
   {
-    id: 'student',
+    id: 'student' as const,
     title: 'Student',
+    subtitle: 'Check-in & attendance history',
     icon: GraduationCap,
     path: '/student',
-    description: 'Check in to classes, view attendance history, and track your progress.',
-    color: 'bg-tertiary-container text-on-tertiary-container',
+    accent: 'from-tertiary to-rose-800',
     iconBg: 'bg-tertiary',
-    iconText: 'text-on-tertiary',
   },
 ] as const;
+
+type RoleId = typeof ROLES[number]['id'];
 
 export default function RoleSelection() {
   const navigate = useNavigate();
   const { login } = useAuth();
 
-  const [selectedRole, setSelectedRole] = useState<string | null>(null);
+  const [selectedRole, setSelectedRole] = useState<RoleId | null>(null);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPw, setShowPw] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [loginAttempts, setLoginAttempts] = useState(0);
 
   // Redirect if already logged in
   useEffect(() => {
-    const cached = localStorage.getItem('ksas_current_user');
-    if (cached) {
-      try {
+    try {
+      const cached = localStorage.getItem('ksas_current_user');
+      if (cached) {
         const u = JSON.parse(cached);
-        if (u.role === 'admin') navigate('/admin');
-        else if (u.role === 'lecturer') navigate('/lecturer');
-        else if (u.role === 'student') navigate('/student');
-      } catch { /* ignore */ }
-    }
+        if (u?.role === 'admin') navigate('/admin', { replace: true });
+        else if (u?.role === 'lecturer') navigate('/lecturer', { replace: true });
+        else if (u?.role === 'student') navigate('/student', { replace: true });
+      }
+    } catch { localStorage.removeItem('ksas_current_user'); }
   }, [navigate]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedRole) return;
+    
+    // Rate limiting: after 5 failed attempts, add delay
+    if (loginAttempts >= 5) {
+      setError('Too many attempts. Please wait a moment before trying again.');
+      setTimeout(() => setLoginAttempts(0), 30000);
+      return;
+    }
+
     setLoading(true);
     setError('');
 
@@ -86,13 +91,15 @@ export default function RoleSelection() {
       const snapshot = await getDocs(q);
 
       if (snapshot.empty) {
-        throw new Error('No account found with those credentials.');
+        setLoginAttempts(a => a + 1);
+        throw new Error('No account found with that email for this role.');
       }
 
       const userDoc = snapshot.docs[0];
       const userData = userDoc.data();
 
       if (userData.password !== hashPassword(password)) {
+        setLoginAttempts(a => a + 1);
         throw new Error('Incorrect password. Please try again.');
       }
 
@@ -100,9 +107,10 @@ export default function RoleSelection() {
         throw new Error('This account has been deactivated. Contact your administrator.');
       }
 
+      setLoginAttempts(0);
       login({ uid: userDoc.id, ...userData });
-      const roleObj = roles.find((r) => r.id === selectedRole);
-      navigate(roleObj!.path);
+      const roleObj = ROLES.find(r => r.id === selectedRole)!;
+      navigate(roleObj.path, { replace: true });
     } catch (err: any) {
       setError(err.message || 'Login failed. Please try again.');
     } finally {
@@ -115,186 +123,207 @@ export default function RoleSelection() {
     setError('');
     setEmail('');
     setPassword('');
+    setShowPw(false);
+    setLoginAttempts(0);
   };
 
-  const activeRole = roles.find((r) => r.id === selectedRole);
+  const activeRole = ROLES.find(r => r.id === selectedRole);
 
   return (
-    <div className="min-h-screen bg-surface flex items-center justify-center p-4">
-      <div className="w-full max-w-5xl flex flex-col lg:flex-row bg-surface-container-lowest rounded-3xl shadow-2xl overflow-hidden border border-outline-variant/20 min-h-[600px]">
+    <div className="min-h-screen bg-surface flex flex-col">
+      {/* Mobile: full screen */}
+      <div className="flex-1 flex flex-col lg:flex-row">
 
-        {/* ── Left panel: Branding ─────────────────────────────────────── */}
-        <div className="lg:w-5/12 bg-primary text-on-primary p-8 lg:p-12 flex flex-col justify-between relative overflow-hidden">
-          {/* Subtle dot grid */}
-          <div
-            className="absolute inset-0 opacity-10 pointer-events-none"
-            style={{ backgroundImage: 'radial-gradient(currentColor 1px, transparent 1px)', backgroundSize: '24px 24px' }}
-          />
+        {/* ── Brand panel ────────────────────────────────────────── */}
+        <div className="relative lg:w-5/12 bg-primary overflow-hidden flex-shrink-0">
+          <div className="dot-grid absolute inset-0" />
+          {/* Gradient blobs */}
+          <div className="absolute -top-20 -right-20 w-64 h-64 bg-white/5 rounded-full blur-3xl" />
+          <div className="absolute -bottom-10 -left-10 w-48 h-48 bg-white/5 rounded-full blur-2xl" />
 
-          <div className="relative z-10">
-            <div className="flex items-center gap-3 mb-10">
-              <div className="w-10 h-10 bg-on-primary/20 rounded-xl flex items-center justify-center">
-                <ShieldCheck className="w-6 h-6" />
+          <div className="relative z-10 p-8 lg:p-12 flex flex-col justify-between min-h-[200px] lg:min-h-screen">
+            {/* Logo */}
+            <div className="flex items-center gap-3">
+              <div className="w-11 h-11 bg-white/15 rounded-2xl flex items-center justify-center border border-white/20">
+                <ShieldCheck className="w-6 h-6 text-white" />
               </div>
               <div>
-                <p className="font-bold text-xl tracking-tight">KSAS</p>
-                <p className="text-[10px] uppercase tracking-widest opacity-70">
-                  Kabarak Smart Attendance
-                </p>
+                <p className="font-bold text-white text-xl tracking-tight" style={{ fontFamily: 'Space Grotesk, Inter, sans-serif' }}>KSAS</p>
+                <p className="text-white/60 text-[10px] uppercase tracking-[0.18em] font-semibold">Smart Attendance</p>
               </div>
             </div>
 
-            <h1 className="font-bold text-3xl lg:text-4xl leading-tight mb-4">
-              Attendance,<br />made intelligent.
-            </h1>
-            <p className="text-on-primary/70 text-sm leading-relaxed max-w-xs">
-              Secure QR-based check-in, real-time tracking, and institutional analytics
-              — built for Kabarak University.
-            </p>
-          </div>
-
-          <div className="relative z-10 space-y-4 hidden lg:block">
-            {[
-              { label: 'Rotating QR Codes', detail: 'Token refreshes every 30 seconds' },
-              { label: 'Device-Bound Check-In', detail: 'Prevents proxy attendance' },
-              { label: 'Real-Time Sync', detail: 'Instant updates across all devices' },
-            ].map((f) => (
-              <div key={f.label} className="flex items-start gap-3">
-                <div className="w-5 h-5 rounded-full bg-on-primary/20 flex items-center justify-center shrink-0 mt-0.5">
-                  <div className="w-2 h-2 bg-on-primary rounded-full" />
-                </div>
-                <div>
-                  <p className="font-semibold text-sm">{f.label}</p>
-                  <p className="text-xs text-on-primary/60">{f.detail}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* ── Right panel: Role selection or Login ─────────────────────── */}
-        <div className="lg:w-7/12 p-8 lg:p-12 flex flex-col justify-center">
-
-          {!selectedRole ? (
-            /* Role selection */
-            <div className="animate-in fade-in duration-300">
-              <h2 className="font-bold text-2xl text-on-surface mb-1">Sign in to KSAS</h2>
-              <p className="text-on-surface-variant text-sm mb-8">
-                Select your role to continue.
+            {/* Hero text (desktop only) */}
+            <div className="hidden lg:block mt-auto">
+              <h1 className="text-white font-bold text-4xl leading-tight mb-4" style={{ fontFamily: 'Space Grotesk, Inter, sans-serif' }}>
+                Attendance,<br />made intelligent.
+              </h1>
+              <p className="text-white/65 text-sm leading-relaxed max-w-xs mb-10">
+                QR-based check-in with real-time sync, device verification, and institutional analytics — built for Kabarak University.
               </p>
-
               <div className="space-y-3">
-                {roles.map((role) => (
-                  <button
-                    key={role.id}
-                    onClick={() => setSelectedRole(role.id)}
-                    className="w-full flex items-center gap-4 p-5 rounded-2xl border border-outline-variant/40 hover:border-primary/40 hover:bg-surface-container transition-all duration-200 text-left group focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2"
-                  >
-                    <div className={`w-12 h-12 ${role.iconBg} ${role.iconText} rounded-xl flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform`}>
-                      <role.icon className="w-6 h-6" />
+                {[
+                  { label: 'Rotating QR Codes', detail: 'Token refreshes every 30 seconds' },
+                  { label: 'Device-Bound Check-In', detail: 'Prevents proxy attendance' },
+                  { label: 'Real-Time Sync', detail: 'Instant updates across all devices' },
+                ].map(f => (
+                  <div key={f.label} className="flex items-center gap-3">
+                    <div className="w-5 h-5 rounded-full bg-white/15 flex items-center justify-center shrink-0">
+                      <div className="w-2 h-2 bg-white rounded-full" />
                     </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="font-bold text-on-surface group-hover:text-primary transition-colors">
-                        {role.title}
-                      </p>
-                      <p className="text-xs text-on-surface-variant mt-0.5 leading-relaxed">
-                        {role.description}
-                      </p>
+                    <div>
+                      <p className="text-white font-semibold text-sm">{f.label}</p>
+                      <p className="text-white/50 text-xs">{f.detail}</p>
                     </div>
-                    <ArrowRight className="w-4 h-4 text-outline opacity-0 group-hover:opacity-100 -translate-x-1 group-hover:translate-x-0 transition-all" />
-                  </button>
+                  </div>
                 ))}
               </div>
             </div>
-          ) : (
-            /* Login form */
-            <div className="animate-in slide-in-from-right-4 fade-in duration-300">
-              <button
-                onClick={handleBack}
-                className="flex items-center gap-1.5 text-sm text-primary font-semibold mb-8 hover:gap-2.5 transition-all"
-              >
-                <ArrowLeft className="w-4 h-4" /> Back
-              </button>
+          </div>
+        </div>
 
-              {/* Role indicator */}
-              {activeRole && (
-                <div className="flex items-center gap-3 mb-6 p-4 rounded-xl bg-surface-container">
-                  <div className={`w-10 h-10 ${activeRole.iconBg} ${activeRole.iconText} rounded-xl flex items-center justify-center`}>
-                    <activeRole.icon className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <p className="font-bold text-on-surface text-sm">{activeRole.title}</p>
-                    <p className="text-xs text-on-surface-variant">Sign in to your account</p>
-                  </div>
-                </div>
-              )}
+        {/* ── Right panel ────────────────────────────────────────── */}
+        <div className="flex-1 flex flex-col justify-center p-6 sm:p-10 lg:p-14">
+          <div className="w-full max-w-md mx-auto">
 
-              {/* Error */}
-              {error && (
-                <div className="flex items-start gap-2.5 p-3.5 bg-error-container text-on-error-container rounded-xl mb-5 text-sm font-medium">
-                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-                  {error}
-                </div>
-              )}
-
-              <form onSubmit={handleLogin} className="space-y-4">
-                {/* Email */}
-                <div>
-                  <label className="block text-sm font-semibold text-on-surface mb-1.5">
-                    Email address
-                  </label>
-                  <div className="relative">
-                    <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-on-surface-variant/50" />
-                    <input
-                      type="email"
-                      required
-                      autoComplete="email"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      placeholder="you@kabarak.ac.ke"
-                      className="w-full pl-10 pr-4 py-3 bg-surface-container border border-outline-variant/50 rounded-xl text-sm text-on-surface placeholder:text-on-surface-variant/40 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all"
-                    />
-                  </div>
+            {!selectedRole ? (
+              /* ── Role selection ────────────────────────────────── */
+              <div className="animate-fade-in">
+                <div className="mb-8">
+                  <h2 className="text-2xl font-bold text-on-surface mb-2" style={{ fontFamily: 'Space Grotesk, Inter, sans-serif' }}>
+                    Sign in to KSAS
+                  </h2>
+                  <p className="text-on-surface-variant text-sm">
+                    Select your role to continue.
+                  </p>
                 </div>
 
-                {/* Password */}
-                <div>
-                  <label className="block text-sm font-semibold text-on-surface mb-1.5">
-                    Password
-                  </label>
-                  <div className="relative">
-                    <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-on-surface-variant/50" />
-                    <input
-                      type="password"
-                      required
-                      autoComplete="current-password"
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      placeholder="Enter your password"
-                      className="w-full pl-10 pr-4 py-3 bg-surface-container border border-outline-variant/50 rounded-xl text-sm text-on-surface placeholder:text-on-surface-variant/40 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all"
-                    />
-                  </div>
+                <div className="space-y-3">
+                  {ROLES.map((role, i) => (
+                    <button
+                      key={role.id}
+                      onClick={() => setSelectedRole(role.id)}
+                      className="w-full flex items-center gap-4 p-5 rounded-2xl border border-outline-variant/30 hover:border-primary/30 hover:bg-primary-container/5 transition-all duration-200 text-left group focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 animate-slide-up"
+                      style={{ animationDelay: `${i * 0.08}s` }}
+                    >
+                      <div className={`w-12 h-12 ${role.iconBg} text-white rounded-2xl flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform duration-200 shadow-sm`}>
+                        <role.icon className="w-6 h-6" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-bold text-on-surface text-base group-hover:text-primary transition-colors">
+                          {role.title}
+                        </p>
+                        <p className="text-xs text-on-surface-variant mt-0.5">{role.subtitle}</p>
+                      </div>
+                      <ArrowRight className="w-4 h-4 text-outline opacity-0 group-hover:opacity-100 -translate-x-1 group-hover:translate-x-0 transition-all duration-200" />
+                    </button>
+                  ))}
                 </div>
 
+                <p className="text-center text-xs text-on-surface-variant mt-8">
+                  Your account is created by your institution administrator.
+                </p>
+              </div>
+            ) : (
+              /* ── Login form ────────────────────────────────────── */
+              <div className="animate-slide-up">
                 <button
-                  type="submit"
-                  disabled={loading}
-                  className="w-full flex items-center justify-center gap-2 py-3.5 bg-primary text-on-primary rounded-xl font-bold text-sm hover:bg-primary/90 transition-all disabled:opacity-60 mt-2"
+                  onClick={handleBack}
+                  className="flex items-center gap-1.5 text-sm text-primary font-semibold mb-8 hover:opacity-70 transition-opacity"
                 >
-                  {loading ? (
-                    <><Loader2 className="w-4 h-4 animate-spin" /> Signing in…</>
-                  ) : (
-                    'Sign In'
-                  )}
+                  <ArrowLeft className="w-4 h-4" /> Change role
                 </button>
-              </form>
 
-              <p className="text-center text-xs text-on-surface-variant mt-6">
-                Your account is created by your institution administrator.
-                Contact IT support if you cannot access your account.
-              </p>
-            </div>
-          )}
+                {/* Role pill */}
+                {activeRole && (
+                  <div className="flex items-center gap-3 mb-6 p-4 rounded-2xl bg-primary-container/20 border border-primary-container/40">
+                    <div className={`w-10 h-10 ${activeRole.iconBg} text-white rounded-xl flex items-center justify-center shrink-0`}>
+                      <activeRole.icon className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <p className="font-bold text-on-surface text-sm">{activeRole.title}</p>
+                      <p className="text-xs text-on-surface-variant">Sign in to your account</p>
+                    </div>
+                  </div>
+                )}
+
+                <div className="mb-6">
+                  <h2 className="text-2xl font-bold text-on-surface" style={{ fontFamily: 'Space Grotesk, Inter, sans-serif' }}>
+                    Welcome back
+                  </h2>
+                  <p className="text-on-surface-variant text-sm mt-1">Enter your credentials to continue.</p>
+                </div>
+
+                {/* Error banner */}
+                {error && (
+                  <div className="flex items-start gap-2.5 p-4 bg-error-container text-on-error-container rounded-2xl mb-5 text-sm font-medium animate-fade-in">
+                    <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <span>{error}</span>
+                  </div>
+                )}
+
+                <form onSubmit={handleLogin} className="space-y-4">
+                  {/* Email */}
+                  <div className="form-group">
+                    <label className="form-label" htmlFor="email">Institutional email</label>
+                    <div className="relative">
+                      <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-on-surface-variant/50 pointer-events-none" />
+                      <input
+                        id="email"
+                        type="email"
+                        required
+                        autoComplete="email"
+                        value={email}
+                        onChange={e => setEmail(e.target.value)}
+                        placeholder="you@kabarak.ac.ke"
+                        className="input-with-icon-l"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Password */}
+                  <div className="form-group">
+                    <label className="form-label" htmlFor="password">Password</label>
+                    <div className="relative">
+                      <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-on-surface-variant/50 pointer-events-none" />
+                      <input
+                        id="password"
+                        type={showPw ? 'text' : 'password'}
+                        required
+                        autoComplete="current-password"
+                        value={password}
+                        onChange={e => setPassword(e.target.value)}
+                        placeholder="Enter your password"
+                        className="input-with-icon-l pr-12"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPw(v => !v)}
+                        className="absolute right-3.5 top-1/2 -translate-y-1/2 text-on-surface-variant/50 hover:text-on-surface transition-colors"
+                        aria-label={showPw ? 'Hide password' : 'Show password'}
+                      >
+                        {showPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className="btn-primary w-full h-12 mt-2 text-base disabled:opacity-60 disabled:cursor-not-allowed"
+                  >
+                    {loading ? (
+                      <><Loader2 className="w-5 h-5 animate-spin" /> Signing in…</>
+                    ) : 'Sign In'}
+                  </button>
+                </form>
+
+                <p className="text-center text-xs text-on-surface-variant mt-6">
+                  Account access issues? Contact your institution's IT support.
+                </p>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>
