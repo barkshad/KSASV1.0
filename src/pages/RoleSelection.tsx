@@ -1,220 +1,300 @@
+/**
+ * src/pages/RoleSelection.tsx
+ * Landing page and login screen.
+ * - No default password hints displayed
+ * - Polished responsive layout
+ */
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Shield, BookOpen, GraduationCap, ArrowRight, ArrowLeft, Lock, Mail, Loader2, Info } from 'lucide-react';
+import {
+  Shield, BookOpen, GraduationCap, ArrowRight, ArrowLeft,
+  Lock, Mail, Loader2, AlertCircle, ShieldCheck,
+} from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import { db, collection, query, where, getDocs } from '../lib/firebase';
 import { hashPassword } from '../lib/auth';
 
+const roles = [
+  {
+    id: 'admin',
+    title: 'Administrator',
+    icon: Shield,
+    path: '/admin',
+    description: 'System configuration, user management, and institutional analytics.',
+    color: 'bg-primary-container text-on-primary-container',
+    iconBg: 'bg-primary',
+    iconText: 'text-on-primary',
+  },
+  {
+    id: 'lecturer',
+    title: 'Lecturer',
+    icon: BookOpen,
+    path: '/lecturer',
+    description: 'Manage course sessions, generate QR codes, and track attendance.',
+    color: 'bg-secondary-container text-on-secondary-container',
+    iconBg: 'bg-secondary',
+    iconText: 'text-on-secondary',
+  },
+  {
+    id: 'student',
+    title: 'Student',
+    icon: GraduationCap,
+    path: '/student',
+    description: 'Check in to classes, view attendance history, and track your progress.',
+    color: 'bg-tertiary-container text-on-tertiary-container',
+    iconBg: 'bg-tertiary',
+    iconText: 'text-on-tertiary',
+  },
+] as const;
+
 export default function RoleSelection() {
   const navigate = useNavigate();
   const { login } = useAuth();
-  
+
   const [selectedRole, setSelectedRole] = useState<string | null>(null);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  const roles = [
-    { id: 'admin', title: 'Admin', icon: Shield, path: '/admin', description: 'System configuration & academic management' },
-    { id: 'lecturer', title: 'Lecturer', icon: BookOpen, path: '/lecturer', description: 'Manage courses & view attendance analytics' },
-    { id: 'student', title: 'Student', icon: GraduationCap, path: '/student', description: 'Check-in to classes & view history' },
-  ];
-
+  // Redirect if already logged in
   useEffect(() => {
-    const cachedUser = localStorage.getItem('ksas_current_user');
-    if (cachedUser) {
-        try {
-            const userObj = JSON.parse(cachedUser);
-            if (userObj.role === 'admin') navigate('/admin');
-            else if (userObj.role === 'lecturer') navigate('/lecturer');
-            else if (userObj.role === 'student') navigate('/student');
-        } catch(e){}
+    const cached = localStorage.getItem('ksas_current_user');
+    if (cached) {
+      try {
+        const u = JSON.parse(cached);
+        if (u.role === 'admin') navigate('/admin');
+        else if (u.role === 'lecturer') navigate('/lecturer');
+        else if (u.role === 'student') navigate('/student');
+      } catch { /* ignore */ }
     }
   }, [navigate]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedRole) return;
-    
     setLoading(true);
     setError('');
-    
+
     try {
       const usersRef = collection(db, 'users');
-      // Look for the user with this email and role
-      const q = query(usersRef, where('email', '==', email), where('role', '==', selectedRole));
+      const q = query(
+        usersRef,
+        where('email', '==', email.toLowerCase().trim()),
+        where('role', '==', selectedRole)
+      );
       const snapshot = await getDocs(q);
-      
+
       if (snapshot.empty) {
-        throw new Error('Invalid credentials or role');
+        throw new Error('No account found with those credentials.');
       }
-      
+
       const userDoc = snapshot.docs[0];
       const userData = userDoc.data();
-      
+
       if (userData.password !== hashPassword(password)) {
-        throw new Error('Invalid credentials');
+        throw new Error('Incorrect password. Please try again.');
       }
-      
-      // Success
+
+      if (userData.status === 'inactive') {
+        throw new Error('This account has been deactivated. Contact your administrator.');
+      }
+
       login({ uid: userDoc.id, ...userData });
-      const roleObj = roles.find(r => r.id === selectedRole);
+      const roleObj = roles.find((r) => r.id === selectedRole);
       navigate(roleObj!.path);
-      
     } catch (err: any) {
-      setError(err.message || 'Login failed');
+      setError(err.message || 'Login failed. Please try again.');
     } finally {
       setLoading(false);
     }
   };
 
+  const handleBack = () => {
+    setSelectedRole(null);
+    setError('');
+    setEmail('');
+    setPassword('');
+  };
+
+  const activeRole = roles.find((r) => r.id === selectedRole);
+
   return (
-    <div className="bg-background text-on-background min-h-screen flex items-center justify-center p-4">
-      <div className="w-full max-w-5xl mx-auto min-h-[min(100vh,800px)] flex flex-col md:flex-row bg-surface rounded-3xl shadow-2xl overflow-hidden border border-outline-variant/30">
-        
-        {/* Left/Top Section: Branding */}
-        <div className="md:w-5/12 bg-primary-container text-on-primary-container p-8 md:p-12 flex flex-col justify-center items-center relative overflow-hidden">
-          <div className="absolute inset-0 opacity-10 pointer-events-none" style={{ backgroundImage: 'radial-gradient(#7c0a1f 1px, transparent 1px)', backgroundSize: '20px 20px' }}></div>
-          <div className="relative z-10 flex flex-col items-center text-center space-y-8 max-w-[384px]">
-            <div className="w-48 h-48 md:w-56 md:h-56 rounded-full bg-white shadow-xl flex items-center justify-center p-6 border-4 border-surface-container overflow-hidden">
-              <img src="https://lh3.googleusercontent.com/aida/AP1WRLu2mQve9UxRQsu0A1RfcBO5LGyq7zz6UXNQRNchp0aCKPz2ZDZFrIqz9WBmoZPRT9IilfmfPwkT40GZnjgD1N7oQ3dLCt3lFGbCkTF2TMjvSL1JiX1HEVCD-QEfFfmLUaFX-AEHkWbavE42ktf3TV1dwwdRJg2EdjTWgWPPrhrEK_e4Bbog9er7FSUOT9HQf0wlbWh2O0y1-s-_lEcIKERN9LG9-1Jp7iPQlH4N8wsNKfC5XKgp4SJqO0R6" alt="KSAS Logo" className="w-full h-full object-contain" />
-            </div>
-            <div className="space-y-2">
-              <h1 className="font-display-lg font-bold tracking-tight">KSAS</h1>
-              <p className="font-label-md tracking-widest uppercase opacity-80">Kabarak Smart Attendance</p>
-            </div>
-            
-            <div className="space-y-6 pt-8 w-full text-left hidden md:block">
-              <div className="flex items-start gap-4">
-                <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center shrink-0">
-                  <Shield className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="font-bold">Secure Verification</h3>
-                  <p className="text-sm opacity-80">Device-bound authentication prevents proxy attendance.</p>
-                </div>
+    <div className="min-h-screen bg-surface flex items-center justify-center p-4">
+      <div className="w-full max-w-5xl flex flex-col lg:flex-row bg-surface-container-lowest rounded-3xl shadow-2xl overflow-hidden border border-outline-variant/20 min-h-[600px]">
+
+        {/* ── Left panel: Branding ─────────────────────────────────────── */}
+        <div className="lg:w-5/12 bg-primary text-on-primary p-8 lg:p-12 flex flex-col justify-between relative overflow-hidden">
+          {/* Subtle dot grid */}
+          <div
+            className="absolute inset-0 opacity-10 pointer-events-none"
+            style={{ backgroundImage: 'radial-gradient(currentColor 1px, transparent 1px)', backgroundSize: '24px 24px' }}
+          />
+
+          <div className="relative z-10">
+            <div className="flex items-center gap-3 mb-10">
+              <div className="w-10 h-10 bg-on-primary/20 rounded-xl flex items-center justify-center">
+                <ShieldCheck className="w-6 h-6" />
               </div>
-              <div className="flex items-start gap-4">
-                <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center shrink-0">
-                  <ArrowRight className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="font-bold">Live Synchronisation</h3>
-                  <p className="text-sm opacity-80">Real-time attendance tracking for every active session.</p>
-                </div>
+              <div>
+                <p className="font-bold text-xl tracking-tight">KSAS</p>
+                <p className="text-[10px] uppercase tracking-widest opacity-70">
+                  Kabarak Smart Attendance
+                </p>
               </div>
             </div>
+
+            <h1 className="font-bold text-3xl lg:text-4xl leading-tight mb-4">
+              Attendance,<br />made intelligent.
+            </h1>
+            <p className="text-on-primary/70 text-sm leading-relaxed max-w-xs">
+              Secure QR-based check-in, real-time tracking, and institutional analytics
+              — built for Kabarak University.
+            </p>
+          </div>
+
+          <div className="relative z-10 space-y-4 hidden lg:block">
+            {[
+              { label: 'Rotating QR Codes', detail: 'Token refreshes every 30 seconds' },
+              { label: 'Device-Bound Check-In', detail: 'Prevents proxy attendance' },
+              { label: 'Real-Time Sync', detail: 'Instant updates across all devices' },
+            ].map((f) => (
+              <div key={f.label} className="flex items-start gap-3">
+                <div className="w-5 h-5 rounded-full bg-on-primary/20 flex items-center justify-center shrink-0 mt-0.5">
+                  <div className="w-2 h-2 bg-on-primary rounded-full" />
+                </div>
+                <div>
+                  <p className="font-semibold text-sm">{f.label}</p>
+                  <p className="text-xs text-on-primary/60">{f.detail}</p>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
 
-        {/* Right/Bottom Section: Role Selection & Login */}
-        <div className="md:w-7/12 p-8 md:p-16 flex flex-col justify-center bg-surface relative">
-          <div className="max-w-[448px] mx-auto w-full space-y-8 relative z-10">
-            
-            {!selectedRole ? (
-              <>
-                <div className="space-y-2 text-center md:text-left">
-                  <h2 className="font-headline-lg font-bold text-on-surface">Welcome to KSAS</h2>
-                  <p className="font-body-md text-on-surface-variant">Select your role to access the dashboard</p>
-                </div>
+        {/* ── Right panel: Role selection or Login ─────────────────────── */}
+        <div className="lg:w-7/12 p-8 lg:p-12 flex flex-col justify-center">
 
-                <div className="grid gap-4 mt-8 animate-in fade-in duration-500">
-                  {roles.map((role, idx) => (
-                    <button
-                      key={role.id}
-                      onClick={() => setSelectedRole(role.id)}
-                      className="group flex flex-col sm:flex-row items-center sm:items-start p-5 sm:p-6 rounded-[24px] bg-surface-container-lowest border border-outline-variant/50 hover:border-primary/40 hover:bg-surface-container-low transition-all duration-300 text-left focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:ring-offset-surface shadow-sm hover:shadow-md"
-                      style={{ animationDelay: `${idx * 100}ms` }}
-                    >
-                      <div className="w-16 h-16 rounded-2xl bg-primary/10 text-primary flex items-center justify-center shrink-0 mb-4 sm:mb-0 group-hover:scale-105 group-hover:bg-primary group-hover:text-on-primary transition-all duration-300">
-                        <role.icon className="w-8 h-8" />
-                      </div>
-                      
-                      <div className="sm:ml-6 flex-1 text-center sm:text-left">
-                        <h3 className="text-xl font-bold text-on-surface group-hover:text-primary transition-colors">{role.title}</h3>
-                        <p className="font-body-sm text-on-surface-variant mt-1.5 leading-relaxed">{role.description}</p>
-                      </div>
+          {!selectedRole ? (
+            /* Role selection */
+            <div className="animate-in fade-in duration-300">
+              <h2 className="font-bold text-2xl text-on-surface mb-1">Sign in to KSAS</h2>
+              <p className="text-on-surface-variant text-sm mb-8">
+                Select your role to continue.
+              </p>
 
-                      <div className="hidden sm:flex mt-4 sm:mt-0 items-center justify-center w-10 h-10 rounded-full bg-surface-container text-primary opacity-0 group-hover:opacity-100 -translate-x-2 group-hover:translate-x-0 transition-all duration-300">
-                        <ArrowRight className="w-5 h-5" />
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </>
-            ) : (
-               <div className="animate-in slide-in-from-right-8 duration-300 space-y-6">
-                  <button 
-                    onClick={() => {
-                      setSelectedRole(null);
-                      setError('');
-                      setPassword('');
-                    }}
-                    className="flex items-center text-primary font-bold text-sm mb-6 hover:underline"
+              <div className="space-y-3">
+                {roles.map((role) => (
+                  <button
+                    key={role.id}
+                    onClick={() => setSelectedRole(role.id)}
+                    className="w-full flex items-center gap-4 p-5 rounded-2xl border border-outline-variant/40 hover:border-primary/40 hover:bg-surface-container transition-all duration-200 text-left group focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2"
                   >
-                    <ArrowLeft className="w-4 h-4 mr-2" /> Back to Roles
+                    <div className={`w-12 h-12 ${role.iconBg} ${role.iconText} rounded-xl flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform`}>
+                      <role.icon className="w-6 h-6" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-bold text-on-surface group-hover:text-primary transition-colors">
+                        {role.title}
+                      </p>
+                      <p className="text-xs text-on-surface-variant mt-0.5 leading-relaxed">
+                        {role.description}
+                      </p>
+                    </div>
+                    <ArrowRight className="w-4 h-4 text-outline opacity-0 group-hover:opacity-100 -translate-x-1 group-hover:translate-x-0 transition-all" />
                   </button>
-                  
-                  <div className="space-y-2">
-                    <h2 className="font-headline-md font-bold text-on-surface capitalize">{selectedRole} Login</h2>
-                    <p className="font-body-md text-on-surface-variant">Enter your credentials to continue</p>
+                ))}
+              </div>
+            </div>
+          ) : (
+            /* Login form */
+            <div className="animate-in slide-in-from-right-4 fade-in duration-300">
+              <button
+                onClick={handleBack}
+                className="flex items-center gap-1.5 text-sm text-primary font-semibold mb-8 hover:gap-2.5 transition-all"
+              >
+                <ArrowLeft className="w-4 h-4" /> Back
+              </button>
+
+              {/* Role indicator */}
+              {activeRole && (
+                <div className="flex items-center gap-3 mb-6 p-4 rounded-xl bg-surface-container">
+                  <div className={`w-10 h-10 ${activeRole.iconBg} ${activeRole.iconText} rounded-xl flex items-center justify-center`}>
+                    <activeRole.icon className="w-5 h-5" />
                   </div>
+                  <div>
+                    <p className="font-bold text-on-surface text-sm">{activeRole.title}</p>
+                    <p className="text-xs text-on-surface-variant">Sign in to your account</p>
+                  </div>
+                </div>
+              )}
 
-                  {error && (
-                    <div className="bg-error/10 text-error p-4 rounded-xl flex items-start gap-3">
-                       <Info className="w-5 h-5 shrink-0 mt-0.5" />
-                       <span className="text-sm font-medium">{error}</span>
-                    </div>
+              {/* Error */}
+              {error && (
+                <div className="flex items-start gap-2.5 p-3.5 bg-error-container text-on-error-container rounded-xl mb-5 text-sm font-medium">
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                  {error}
+                </div>
+              )}
+
+              <form onSubmit={handleLogin} className="space-y-4">
+                {/* Email */}
+                <div>
+                  <label className="block text-sm font-semibold text-on-surface mb-1.5">
+                    Email address
+                  </label>
+                  <div className="relative">
+                    <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-on-surface-variant/50" />
+                    <input
+                      type="email"
+                      required
+                      autoComplete="email"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      placeholder="you@kabarak.ac.ke"
+                      className="w-full pl-10 pr-4 py-3 bg-surface-container border border-outline-variant/50 rounded-xl text-sm text-on-surface placeholder:text-on-surface-variant/40 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all"
+                    />
+                  </div>
+                </div>
+
+                {/* Password */}
+                <div>
+                  <label className="block text-sm font-semibold text-on-surface mb-1.5">
+                    Password
+                  </label>
+                  <div className="relative">
+                    <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-on-surface-variant/50" />
+                    <input
+                      type="password"
+                      required
+                      autoComplete="current-password"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      placeholder="Enter your password"
+                      className="w-full pl-10 pr-4 py-3 bg-surface-container border border-outline-variant/50 rounded-xl text-sm text-on-surface placeholder:text-on-surface-variant/40 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all"
+                    />
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="w-full flex items-center justify-center gap-2 py-3.5 bg-primary text-on-primary rounded-xl font-bold text-sm hover:bg-primary/90 transition-all disabled:opacity-60 mt-2"
+                >
+                  {loading ? (
+                    <><Loader2 className="w-4 h-4 animate-spin" /> Signing in…</>
+                  ) : (
+                    'Sign In'
                   )}
+                </button>
+              </form>
 
-                  <form onSubmit={handleLogin} className="space-y-5">
-                    <div className="space-y-1">
-                      <label className="text-sm font-bold text-on-surface">Email Address</label>
-                      <div className="relative">
-                        <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                          <Mail className="w-5 h-5 text-on-surface-variant/50" />
-                        </div>
-                        <input 
-                          type="email" 
-                          required
-                          value={email}
-                          onChange={(e) => setEmail(e.target.value)}
-                          className="w-full bg-surface-container border border-outline-variant/50 rounded-xl py-3 pl-12 pr-4 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all text-on-surface"
-                          placeholder="your.email@kabarak.ac.ke"
-                        />
-                      </div>
-                    </div>
-                    
-                    <div className="space-y-1">
-                      <label className="text-sm font-bold text-on-surface">Password <span className="text-xs text-on-surface-variant font-normal tracking-wide ml-1">(Default is 123456)</span></label>
-                      <div className="relative">
-                        <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                          <Lock className="w-5 h-5 text-on-surface-variant/50" />
-                        </div>
-                        <input 
-                          type="password" 
-                          required
-                          value={password}
-                          onChange={(e) => setPassword(e.target.value)}
-                          className="w-full bg-surface-container border border-outline-variant/50 rounded-xl py-3 pl-12 pr-4 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all text-on-surface"
-                          placeholder="••••••••"
-                        />
-                      </div>
-                    </div>
-
-                    <button 
-                      type="submit" 
-                      disabled={loading}
-                      className="w-full bg-primary text-on-primary py-4 rounded-xl font-bold flex items-center justify-center hover:bg-primary/90 transition-all disabled:opacity-70 mt-2"
-                    >
-                      {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : 'Secure Login'}
-                    </button>
-                  </form>
-               </div>
-            )}
-            
-          </div>
+              <p className="text-center text-xs text-on-surface-variant mt-6">
+                Your account is created by your institution administrator.
+                Contact IT support if you cannot access your account.
+              </p>
+            </div>
+          )}
         </div>
       </div>
     </div>
