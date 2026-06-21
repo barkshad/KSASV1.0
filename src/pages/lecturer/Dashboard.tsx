@@ -1,12 +1,11 @@
-import React, { useMemo, useEffect, useState } from 'react';
-import { Radio, StopCircle, QrCode, AlertCircle, FileBarChart, Calendar, Loader2 } from 'lucide-react';
+import React, { useMemo, useEffect, useState, useCallback } from 'react';
+import { Radio, StopCircle, QrCode, PlusCircle, AlertCircle, FileBarChart, Calendar, Loader2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuth';
 import { useFirestoreRealtimeCollection } from '../../hooks/useFirestoreRealtime';
-import { db, collection, onSnapshot } from '../../lib/firebase';
-import { collections, createSession, closeSession, logAudit } from '../../lib/db';
+import { db, collection, addDoc, serverTimestamp, doc, updateDoc, onSnapshot } from '../../lib/firebase';
+import { collections, archiveSession } from '../../lib/db';
 import { generateSessionTOTPSecret } from '../../lib/totp';
-import toast from 'react-hot-toast';
 
 export default function LecturerDashboard() {
   const navigate = useNavigate();
@@ -19,7 +18,6 @@ export default function LecturerDashboard() {
   }, [allSessions, user]);
 
   const [starting, setStarting] = useState(false);
-  const [ending, setEnding] = useState(false);
   const [attendanceCount, setAttendanceCount] = useState(0);
 
   // Real-time attendance count using onSnapshot (NOT one-time getDocs)
@@ -43,22 +41,27 @@ export default function LecturerDashboard() {
     setStarting(true);
     try {
       const secret = generateSessionTOTPSecret();
-      const sessionId = await createSession({
+      const dateStr = new Date().toISOString().split('T')[0];
+      const newSessionRef = await addDoc(collection(db, collections.SESSIONS), {
         courseCode,
         courseName,
         lecturerId: user?.uid,
         lecturerName: user?.name || 'Lecturer',
         room,
-        totpSecret: secret,
+        date: dateStr,
+        startTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        endTime: new Date(Date.now() + 2 * 60 * 60 * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         windowMinutes: 15,
-        enrolledCount: 50
+        status: 'open',
+        totpSecret: secret,
+        enrolledCount: 50,
+        createdAt: serverTimestamp()
       });
 
-      await logAudit(user, 'SESSION_START', 'session', `Started session ${sessionId} for ${courseCode}`);
-      navigate(`/lecturer/live?sessionId=${sessionId}`);
-    } catch (err: any) {
+      navigate(`/lecturer/live?sessionId=${newSessionRef.id}`);
+    } catch (err) {
       console.error('Failed to start session', err);
-      toast.error(err.message || 'Failed to start session. Please try again.');
+      alert('Failed to start session. Please try again.');
     } finally {
       setStarting(false);
     }
@@ -66,18 +69,14 @@ export default function LecturerDashboard() {
 
   const handleEndSession = async () => {
     if (!activeSession) return;
-    if (!confirm('End this session? Attendance data will be archived.')) return;
-
-    setEnding(true);
-    try {
-      await closeSession(activeSession.id, user?.uid);
-      await logAudit(user, 'SESSION_CLOSE', 'session', `Closed session ${activeSession.id}`);
-      toast.success('Session ended and archived');
-    } catch (err: any) {
-      console.error('Failed to end session', err);
-      toast.error(err.message || 'Failed to end session.');
-    } finally {
-      setEnding(false);
+    if (confirm('End this session? Attendance data will be archived.')) {
+      try {
+        await updateDoc(doc(db, collections.SESSIONS, activeSession.id), { status: 'closed' });
+        await archiveSession(activeSession.id);
+      } catch (err) {
+        console.error('Failed to end session', err);
+        alert('Failed to end session.');
+      }
     }
   };
 
@@ -173,11 +172,10 @@ export default function LecturerDashboard() {
                 <div className="flex flex-wrap gap-3">
                   <button
                     onClick={handleEndSession}
-                    disabled={ending}
-                    className="bg-error text-on-error px-6 py-3 rounded-lg font-bold flex items-center gap-2 hover:opacity-90 transition-opacity active:scale-95 disabled:opacity-60"
+                    className="bg-error text-on-error px-6 py-3 rounded-lg font-bold flex items-center gap-2 hover:opacity-90 transition-opacity active:scale-95"
                   >
-                    {ending ? <Loader2 className="w-5 h-5 animate-spin" /> : <StopCircle className="w-5 h-5" />}
-                    {ending ? 'Ending...' : 'End Session'}
+                    <StopCircle className="w-5 h-5" />
+                    End Session
                   </button>
                   <button
                     onClick={() => navigate(`/lecturer/live?sessionId=${activeSession.id}`)}
