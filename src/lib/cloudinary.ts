@@ -1,49 +1,58 @@
-import { CLOUDINARY_CONFIG } from './firebase';
+/**
+ * src/lib/cloudinary.ts
+ * Cloudinary upload and fetch utilities for JSON archival.
+ * Config is read from environment variables via env.ts.
+ */
+import { env } from './env';
 
-export async function uploadJSONToCloudinary(filename: string, data: any): Promise<string> {
+const { cloudName, uploadPreset, folderPrefix } = env.cloudinary;
+
+/**
+ * Upload a JSON-serializable object to Cloudinary as a raw file.
+ * Returns the secure URL of the uploaded file.
+ */
+export async function uploadJSONToCloudinary(filename: string, data: unknown): Promise<string> {
   const jsonString = JSON.stringify(data);
   const blob = new Blob([jsonString], { type: 'application/json' });
-  
+
+  const publicId = `${folderPrefix}${filename.replace('.json', '')}`;
+
   const formData = new FormData();
   formData.append('file', blob, filename);
-  formData.append('upload_preset', CLOUDINARY_CONFIG.uploadPreset);
-  formData.append('public_id', `${CLOUDINARY_CONFIG.folderPrefix}${filename.replace('.json', '')}`);
-  // Removed invalidate and overwrite as they cause unsigned upload to fail.
-  // formData.append('invalidate', 'true');
-  // formData.append('overwrite', 'true');
+  formData.append('upload_preset', uploadPreset);
+  formData.append('public_id', publicId);
 
-  try {
-    const response = await fetch(`https://api.cloudinary.com/v1_1/${CLOUDINARY_CONFIG.cloudName}/raw/upload`, {
-      method: 'POST',
-      body: formData
-    });
-    
-    if (!response.ok) {
-        const errorText = await response.text();
-        console.error('Cloudinary response error:', errorText);
-        throw new Error(`Cloudinary upload failed: ${errorText}`);
-    }
+  const response = await fetch(
+    `https://api.cloudinary.com/v1_1/${cloudName}/raw/upload`,
+    { method: 'POST', body: formData }
+  );
 
-    const result = await response.json();
-    return result.secure_url;
-  } catch (error) {
-    console.error('Error uploading to Cloudinary:', error);
-    throw error;
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Cloudinary upload failed: ${errorText}`);
   }
+
+  const result = await response.json();
+  return result.secure_url as string;
 }
 
-export async function fetchJSONFromCloudinary(filename: string): Promise<any> {
-    const url = `https://res.cloudinary.com/${CLOUDINARY_CONFIG.cloudName}/raw/upload/v1/${CLOUDINARY_CONFIG.folderPrefix}${filename}?t=${Date.now()}`;
-    try {
-        const response = await fetch(url);
-        if (!response.ok) {
-            // File might not exist yet
-            if (response.status === 404) return null;
-            throw new Error('Failed to fetch from Cloudinary');
-        }
-        return await response.json();
-    } catch (error) {
-        console.error('Error fetching from Cloudinary:', error);
-        return null;
+/**
+ * Fetch and parse a JSON file from Cloudinary.
+ * Returns null if the file does not exist (404).
+ */
+export async function fetchJSONFromCloudinary(filename: string): Promise<unknown> {
+  // Cache-bust with timestamp to always get the latest version
+  const url = `https://res.cloudinary.com/${cloudName}/raw/upload/v1/${folderPrefix}${filename}?t=${Date.now()}`;
+
+  try {
+    const response = await fetch(url);
+    if (!response.ok) {
+      if (response.status === 404) return null;
+      throw new Error(`Cloudinary fetch failed with status ${response.status}`);
     }
+    return await response.json();
+  } catch (error) {
+    console.error('[Cloudinary] fetch error:', error);
+    return null;
+  }
 }
