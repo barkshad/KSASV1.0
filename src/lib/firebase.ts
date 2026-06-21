@@ -1,18 +1,31 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getFirestore, collection, doc, getDoc, getDocs, setDoc, addDoc, updateDoc, deleteDoc, query, where, Timestamp, onSnapshot, runTransaction, serverTimestamp } from 'firebase/firestore';
 
-// Real Firebase Config
+// Firebase config now comes from env vars (see .env.example) instead of
+// being hardcoded here. This is mainly for hygiene / multi-environment
+// support — Firebase web API keys identify the project rather than secure
+// it, so Firestore security rules remain the actual access control layer.
+function requireEnv(key: string): string {
+  const value = import.meta.env[key];
+  if (!value) {
+    throw new Error(
+      `Missing required environment variable: ${key}. Copy .env.example to .env and fill in your Firebase project values.`
+    );
+  }
+  return value;
+}
+
 const firebaseConfig = {
-  apiKey: "AIzaSyANn7DJq76nrxMRY25vO8sAcEiRIE8Rd8c",
-  authDomain: "gen-lang-client-0420782130.firebaseapp.com",
-  projectId: "gen-lang-client-0420782130",
-  storageBucket: "gen-lang-client-0420782130.firebasestorage.app",
-  messagingSenderId: "507824012838",
-  appId: "1:507824012838:web:c2107667b88fe8032c70e7"
+  apiKey: requireEnv('VITE_FIREBASE_API_KEY'),
+  authDomain: requireEnv('VITE_FIREBASE_AUTH_DOMAIN'),
+  projectId: requireEnv('VITE_FIREBASE_PROJECT_ID'),
+  storageBucket: requireEnv('VITE_FIREBASE_STORAGE_BUCKET'),
+  messagingSenderId: requireEnv('VITE_FIREBASE_MESSAGING_SENDER_ID'),
+  appId: requireEnv('VITE_FIREBASE_APP_ID'),
 };
 
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
-export const db = getFirestore(app, "ai-studio-a5c4dd4a-323c-4393-886f-818343a351d5");
+export const db = getFirestore(app, requireEnv('VITE_FIREBASE_FIRESTORE_DB_ID'));
 
 // Re-export common Firestore functions to use elsewhere
 export {
@@ -33,7 +46,7 @@ export {
 };
 
 export const CLOUDINARY_CONFIG = {
-  cloudName: 'dilrcexxe',
-  uploadPreset: 'MingleKe',
-  folderPrefix: 'ksas/'
+  cloudName: requireEnv('VITE_CLOUDINARY_CLOUD_NAME'),
+  uploadPreset: requireEnv('VITE_CLOUDINARY_UPLOAD_PRESET'),
+  folderPrefix: import.meta.env.VITE_CLOUDINARY_FOLDER_PREFIX || 'ksas/',
 };
