@@ -13,11 +13,12 @@ import { useSearchParams, useNavigate } from 'react-router-dom';
 import { QRCodeSVG } from 'qrcode.react';
 import {
   Users, CheckCircle, Loader2, Clock, AlertCircle,
-  Wifi, WifiOff, RefreshCw, RotateCcw,
+  Wifi, WifiOff, RefreshCw, RotateCcw, Download,
 } from 'lucide-react';
 import { db, doc, collection, onSnapshot, updateDoc } from '../../lib/firebase';
 import { collections, archiveSession, closeSession } from '../../lib/db';
 import { getCurrentTOTP } from '../../lib/totp';
+import { buildAttendanceCsv, downloadCsv, formatTimeIn, AttendanceCsvRow } from '../../lib/csvExport';
 
 const QR_DISPLAY_INTERVAL_MS = 5_000; // QR UI refreshes every 5 seconds
 const TOTP_PERIOD_S = 30;             // TOTP token period (must match totp.ts)
@@ -132,6 +133,32 @@ export default function LiveSession() {
     await updateDoc(doc(db, collections.SESSIONS, sessionId), { status: 'open' });
   };
 
+  // ── CSV export ─────────────────────────────────────────────────────────────
+  const handleExportCsv = () => {
+    if (!sessionData) return;
+    if (attendance.length === 0) {
+      alert('No check-ins to export yet.');
+      return;
+    }
+
+    const rows: AttendanceCsvRow[] = attendance.map((a: any) => ({
+      studentId: a.studentId || '',
+      studentName: a.studentName || '',
+      studentEmail: a.studentEmail || '',
+      status: a.status || 'present',
+      date: sessionData.date || '',
+      timeIn: formatTimeIn(a.timestamp),
+      courseCode: sessionData.courseCode || '',
+      courseName: sessionData.courseName || '',
+      room: sessionData.room || '',
+      lecturerName: sessionData.lecturerName || '',
+    }));
+
+    const csv = buildAttendanceCsv(rows);
+    const safeCourse = (sessionData.courseCode || 'session').replace(/[^a-zA-Z0-9]/g, '_');
+    downloadCsv(`attendance_${safeCourse}_${sessionData.date || 'export'}.csv`, csv);
+  };
+
   // ── Render guards ──────────────────────────────────────────────────────────
   if (loading) {
     return (
@@ -158,10 +185,10 @@ export default function LiveSession() {
 
   const qrData = `ksas://attend?sessionId=${sessionId}&token=${totpToken}`;
   const isOpen = sessionData.status === 'open';
-  const totalEnrolled = sessionData.enrolledCount || 50;
+  const totalEnrolled = sessionData.enrolledCount || 0;
   const totalPresent = attendance.length;
   const lateCount = attendance.filter((a: any) => a.status === 'late').length;
-  const attendancePct = Math.min(100, Math.round((totalPresent / totalEnrolled) * 100));
+  const attendancePct = totalEnrolled > 0 ? Math.min(100, Math.round((totalPresent / totalEnrolled) * 100)) : 0;
 
   // Countdown colour: green → yellow → red
   const countdownColor =
@@ -198,6 +225,12 @@ export default function LiveSession() {
           </div>
 
           <div className="flex gap-2 flex-wrap">
+            <button
+              onClick={handleExportCsv}
+              className="flex items-center gap-2 px-4 py-2.5 bg-surface-container border border-outline-variant rounded-xl text-sm font-bold text-on-surface hover:bg-surface-variant transition-colors"
+            >
+              <Download className="w-4 h-4" /> Export CSV
+            </button>
             {!isOpen && (
               <button
                 onClick={handleReopenSession}
